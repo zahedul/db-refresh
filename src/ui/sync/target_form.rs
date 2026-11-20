@@ -5,7 +5,7 @@ use dioxus::prelude::*;
 use crate::database::connection_url::{ConnectionUrl, parse_connection_url};
 use crate::database::credentials::{delete_password, password_for, save_password};
 use crate::database::restore::test_connection;
-use crate::database::target::{DatabaseTarget, upsert_target};
+use crate::database::target::{DatabaseTarget, DumpSource, upsert_target};
 use crate::error::AppError;
 use crate::settings::Settings;
 use crate::ui::app_context::use_app_context;
@@ -31,6 +31,10 @@ struct TargetFields {
     database: Signal<String>,
     dump_group: Signal<String>,
     password: Signal<String>,
+    source_profile: Signal<String>,
+    source_bucket: Signal<String>,
+    source_folder: Signal<String>,
+    source_name_filter: Signal<String>,
 }
 
 impl TargetFields {
@@ -45,6 +49,12 @@ impl TargetFields {
             user: (self.user)(),
             database: (self.database)(),
             dump_group: (self.dump_group)(),
+            dump_source: DumpSource {
+                profile: (self.source_profile)().trim().to_string(),
+                bucket: (self.source_bucket)().trim().to_lowercase(),
+                folder_prefix: as_folder_prefix(&(self.source_folder)()),
+                name_filter: (self.source_name_filter)().trim().to_string(),
+            },
             ..draft.clone()
         }
         .trimmed();
@@ -109,6 +119,10 @@ pub fn TargetFormDialog(
         database: use_signal(|| draft.database.clone()),
         dump_group: use_signal(|| draft.dump_group.clone()),
         password: use_signal(String::new),
+        source_profile: use_signal(|| draft.dump_source.profile.clone()),
+        source_bucket: use_signal(|| draft.dump_source.bucket.clone()),
+        source_folder: use_signal(|| draft.dump_source.folder_prefix.clone()),
+        source_name_filter: use_signal(|| draft.dump_source.name_filter.clone()),
     };
     let mut should_save_password = use_signal(|| is_new || draft.is_password_saved);
     let mut is_password_visible = use_signal(|| false);
@@ -281,6 +295,10 @@ pub fn TargetFormDialog(
                 }
             }
 
+            FormSection { title: "One-click refresh",
+                OneClickRefreshFields { fields }
+            }
+
             ConnectionCheckMessage { check: connection_check() }
             if let Some(message) = form_error() {
                 p { class: "form-alert error", "{message}" }
@@ -413,5 +431,70 @@ fn ConnectionCheckMessage(check: ConnectionCheck) -> Element {
         ConnectionCheck::Failed(message) => rsx! {
             p { class: "form-alert error", "✗ {message}" }
         },
+    }
+}
+
+/// Where "Refresh latest" finds this database's newest dump.
+#[component]
+fn OneClickRefreshFields(fields: TargetFields) -> Element {
+    let settings = use_app_context().settings;
+
+    let copy_current_source = move |_| {
+        let current = settings.peek();
+        let (mut profile, mut bucket, mut folder) = (
+            fields.source_profile,
+            fields.source_bucket,
+            fields.source_folder,
+        );
+        profile.set(current.profile.clone().unwrap_or_default());
+        bucket.set(current.bucket.clone());
+        folder.set(current.folder_prefix.clone());
+    };
+
+    rsx! {
+        div { class: "refresh-source-intro",
+            span { class: "field-hint",
+                "Where the newest dump for this database lives. Fill it in to get a ⟳ Refresh latest button."
+            }
+            button { class: "link-button", onclick: copy_current_source, "Use current S3 source" }
+        }
+        div { class: "form-row",
+            FormField { label: "AWS profile", is_narrow: true,
+                PlainTextInput { value: fields.source_profile, placeholder: "default" }
+            }
+            FormField { label: "Bucket",
+                PlainTextInput { value: fields.source_bucket, placeholder: "my-backup-bucket" }
+            }
+        }
+        div { class: "form-row",
+            FormField { label: "Folder",
+                PlainTextInput { value: fields.source_folder, placeholder: "backups/prod/" }
+            }
+            FormField { label: "Name contains", is_narrow: true,
+                PlainTextInput { value: fields.source_name_filter, placeholder: "prod_" }
+            }
+        }
+    }
+}
+
+/// `backups/prod` -> `backups/prod/`, so only that folder matches, not `backups/prod-old/`.
+fn as_folder_prefix(typed_folder: &str) -> String {
+    let folder = typed_folder.trim().trim_start_matches('/');
+    if folder.is_empty() || folder.ends_with('/') {
+        return folder.to_string();
+    }
+    format!("{folder}/")
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn folder_prefix_gets_one_trailing_slash() {
+        assert_eq!(as_folder_prefix(" backups/prod "), "backups/prod/");
+        assert_eq!(as_folder_prefix("backups/prod/"), "backups/prod/");
+        assert_eq!(as_folder_prefix("/backups"), "backups/");
+        assert_eq!(as_folder_prefix(""), "");
     }
 }

@@ -2,8 +2,9 @@ use dioxus::prelude::*;
 
 use crate::database::target::DatabaseTarget;
 use crate::ui::app_context::use_app_context;
-use crate::ui::icons::{PencilIcon, PlusIcon, ServerIcon};
+use crate::ui::icons::{PencilIcon, PlusIcon, RefreshIcon, ServerIcon};
 use crate::ui::panel_header::PanelHeader;
+use crate::ui::sync::refresh_dialog::RefreshLatestDialog;
 use crate::ui::sync::target_form::TargetFormDialog;
 use crate::ui::tags::GroupTag;
 
@@ -14,6 +15,8 @@ type EditingTarget = Option<(DatabaseTarget, bool)>;
 pub fn TargetsPanel() -> Element {
     let app = use_app_context();
     let mut editing = use_signal(|| EditingTarget::None);
+    let mut refreshing = use_signal(|| None::<DatabaseTarget>);
+    let is_restore_running = app.restore.read().is_running();
     let targets = app.settings.read().database_targets.clone();
     let selected_target_id = (app.selected_target_id)();
     let mut start_new_target = move || editing.set(Some((DatabaseTarget::new_draft(), true)));
@@ -48,9 +51,14 @@ pub fn TargetsPanel() -> Element {
                     TargetCard {
                         key: "{target.id}",
                         is_selected: selected_target_id.as_deref() == Some(target.id.as_str()),
+                        is_restore_running,
                         on_edit: {
                             let target = target.clone();
                             move |_| editing.set(Some((target.clone(), false)))
+                        },
+                        on_refresh: {
+                            let target = target.clone();
+                            move |_| refreshing.set(Some(target.clone()))
                         },
                         target,
                     }
@@ -60,11 +68,20 @@ pub fn TargetsPanel() -> Element {
         if let Some((draft, is_new)) = editing() {
             TargetFormDialog { draft, is_new, on_close: move |_| editing.set(None) }
         }
+        if let Some(target) = refreshing() {
+            RefreshLatestDialog { target, on_close: move |_| refreshing.set(None) }
+        }
     }
 }
 
 #[component]
-fn TargetCard(target: DatabaseTarget, is_selected: bool, on_edit: EventHandler<()>) -> Element {
+fn TargetCard(
+    target: DatabaseTarget,
+    is_selected: bool,
+    is_restore_running: bool,
+    on_edit: EventHandler<()>,
+    on_refresh: EventHandler<()>,
+) -> Element {
     let mut selected_target_id = use_app_context().selected_target_id;
     let target_id = target.id.clone();
 
@@ -87,6 +104,28 @@ fn TargetCard(target: DatabaseTarget, is_selected: bool, on_edit: EventHandler<(
                 }
                 if target.is_password_saved {
                     span { class: "target-keychain", "🔑 Password in Keychain" }
+                }
+                if target.dump_source.is_configured() {
+                    button {
+                        class: "refresh-latest-button",
+                        title: "Download the newest dump from {target.dump_source.s3_location()} and restore it",
+                        disabled: is_restore_running,
+                        onclick: move |event| {
+                            event.stop_propagation();
+                            on_refresh.call(());
+                        },
+                        RefreshIcon {}
+                        "Refresh latest"
+                    }
+                } else {
+                    button {
+                        class: "link-button setup-refresh",
+                        onclick: move |event| {
+                            event.stop_propagation();
+                            on_edit.call(());
+                        },
+                        "Set up one-click refresh →"
+                    }
                 }
             }
             button {

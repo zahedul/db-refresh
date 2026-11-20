@@ -1,3 +1,4 @@
+mod refresh_dialog;
 mod restore_runner;
 mod sync_panel;
 mod target_form;

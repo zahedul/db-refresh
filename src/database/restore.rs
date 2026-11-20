@@ -46,16 +46,24 @@ pub enum RestoreExit {
 /// Stages of the restore script, in order. Shown as a step indicator.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub enum RestorePhase {
+    /// Only in "Refresh latest": fetching the dump from S3 before the script runs.
+    Downloading,
     CheckingDump,
     Connecting,
     RestoringData,
 }
 
 impl RestorePhase {
-    pub const ALL: [Self; 3] = [Self::CheckingDump, Self::Connecting, Self::RestoringData];
+    pub const ALL: [Self; 4] = [
+        Self::Downloading,
+        Self::CheckingDump,
+        Self::Connecting,
+        Self::RestoringData,
+    ];
 
     pub fn label(self) -> &'static str {
         match self {
+            Self::Downloading => "Download",
             Self::CheckingDump => "Check dump",
             Self::Connecting => "Connect",
             Self::RestoringData => "Restore data",

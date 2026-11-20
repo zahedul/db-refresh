@@ -76,7 +76,7 @@ pub fn retry_download(downloads: DownloadJobs, settings: Signal<Settings>, job: 
     );
 }
 
-fn remember_local_name(mut settings: Signal<Settings>, s3_key: &str, file_name: String) {
+pub fn remember_local_name(mut settings: Signal<Settings>, s3_key: &str, file_name: String) {
     settings.with_mut(|settings| {
         settings
             .downloaded_files

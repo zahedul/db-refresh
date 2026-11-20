@@ -15,8 +15,8 @@ use dioxus::prelude::*;
 use aws::profiles::choose_profile;
 use settings::{load_settings, save_settings};
 use ui::{
-    AppContext, AppView, ConnectPanel, JobsPanel, RestoreState, ResultsPanel, SearchState,
-    SyncView, load_profiles,
+    AppContext, AppView, ConnectPanel, HelpView, JobsPanel, RestoreState, ResultsPanel,
+    SearchState, SyncView, load_profiles,
 };
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
@@ -82,6 +82,7 @@ fn App() -> Element {
                     }
                 },
                 AppView::Sync => rsx! { SyncView {} },
+                AppView::Help => rsx! { HelpView {} },
             }
         }
     }
@@ -98,6 +99,7 @@ fn AppHeader() -> Element {
             nav { class: "tabs",
                 TabButton { label: "↓ Download", view: AppView::Download }
                 TabButton { label: "⇄ Sync database", view: AppView::Sync, is_busy: is_restoring }
+                TabButton { label: "? Help", view: AppView::Help }
             }
         }
     }

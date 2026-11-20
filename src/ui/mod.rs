@@ -3,6 +3,7 @@ mod connect;
 mod download_dialog;
 mod downloads;
 mod folder_browser;
+mod help;
 mod icons;
 mod jobs;
 mod modal;
@@ -17,6 +18,7 @@ mod tags;
 
 pub use app_context::{AppContext, AppView, use_app_context};
 pub use connect::ConnectPanel;
+pub use help::HelpView;
 pub use jobs::JobsPanel;
 pub use profile_picker::load_profiles;
 pub use results::ResultsPanel;

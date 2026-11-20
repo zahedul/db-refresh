@@ -71,6 +71,8 @@ mkdir -p "$OUT_DIR"
 STAGING_DIR="$(mktemp -d)"
 trap 'rm -rf "$STAGING_DIR"' EXIT
 cp -R "$APP_PATH" "$STAGING_DIR/"
+# The user guide sits next to the app, so people see it when they open the .dmg.
+cp docs/USER_GUIDE.md "$STAGING_DIR/User Guide.md"
 # Shown next to the app in the opened .dmg, so users can drag it to install.
 ln -s /Applications "$STAGING_DIR/Applications"
 rm -f "$DMG_PATH"

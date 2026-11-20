@@ -4,12 +4,15 @@ use std::time::Duration;
 use dioxus::prelude::*;
 use rfd::AsyncFileDialog;
 
+use crate::aws::download::DownloadProgress;
 use crate::clipboard::copy_to_clipboard;
 use crate::database::credentials::password_for;
 use crate::database::log_line::{LogLevel, LogLine};
 use crate::database::restore::{RestorePhase, RestoreRequest};
 use crate::database::target::DatabaseTarget;
-use crate::format::{format_duration, format_relative_age, format_size, now_epoch_secs};
+use crate::format::{
+    format_duration, format_relative_age, format_size, format_speed, now_epoch_secs,
+};
 use crate::local_files::{LocalDump, display_local_path, download_dir, list_local_dumps};
 use crate::ui::app_context::{AppContext, use_app_context};
 use crate::ui::icons::{DatabaseIcon, RefreshIcon, ServerIcon};
@@ -274,6 +277,7 @@ fn ConfirmRestoreDialog(
                 dump_name: dump.file_name.clone(),
                 target_name: target.name.clone(),
                 database: target.database.clone(),
+                includes_download: false,
             };
             start_restore(app, request, job);
             on_close.call(());
@@ -338,20 +342,26 @@ fn RestoreStatus() -> Element {
             job,
             started_at,
             phase,
+            download_progress,
             process_group_id,
+            task,
         } => {
-            let elapsed = format_duration(started_at.elapsed());
+            let elapsed = started_at.elapsed();
+            let status_text = running_status_text(job, *phase, *download_progress, elapsed);
+            let can_cancel = process_group_id.is_some() || task.is_some();
             rsx! {
-                PhaseSteps { current: *phase, outcome: StepsOutcome::InProgress }
+                PhaseSteps {
+                    current: *phase,
+                    outcome: StepsOutcome::InProgress,
+                    includes_download: job.includes_download,
+                }
                 div { class: "restore-status running",
                     span { class: "spinner" }
-                    span { class: "restore-status-text",
-                        "{phase.label()} · {job.dump_name} → {job.database} · {elapsed}"
-                    }
+                    span { class: "restore-status-text", "{status_text}" }
                     button {
                         class: "secondary small",
-                        title: "Stops the restore. The database may be left partly restored.",
-                        disabled: process_group_id.is_none(),
+                        title: "Stops the refresh. The database may be left partly restored.",
+                        disabled: !can_cancel,
                         onclick: move |_| cancel_restore(app),
                         "Cancel"
                     }
@@ -400,7 +410,11 @@ fn RestoreStatus() -> Element {
                 ),
             };
             rsx! {
-                PhaseSteps { current: *reached_phase, outcome: steps_outcome }
+                PhaseSteps {
+                    current: *reached_phase,
+                    outcome: steps_outcome,
+                    includes_download: job.includes_download,
+                }
                 div { class: "restore-status {status_class}", "{message}" }
             }
         }
@@ -416,7 +430,10 @@ enum StepsOutcome {
 
 /// `Check dump ✓ ─ Connect ✓ ─ Restore data ● ─ Done`
 #[component]
-fn PhaseSteps(current: RestorePhase, outcome: StepsOutcome) -> Element {
+fn PhaseSteps(current: RestorePhase, outcome: StepsOutcome, includes_download: bool) -> Element {
+    let phases = RestorePhase::ALL
+        .into_iter()
+        .filter(move |phase| includes_download || *phase != RestorePhase::Downloading);
     let step_class = |phase: RestorePhase| match (phase.cmp(&current), outcome) {
         (Ordering::Less, _) | (Ordering::Equal, StepsOutcome::Done) => "done",
         (Ordering::Equal, StepsOutcome::InProgress) => "active",
@@ -431,7 +448,7 @@ fn PhaseSteps(current: RestorePhase, outcome: StepsOutcome) -> Element {
 
     rsx! {
         ol { class: "phase-steps",
-            for phase in RestorePhase::ALL {
+            for phase in phases {
                 li { key: "{phase.label()}", class: "phase-step {step_class(phase)}",
                     span { class: "phase-dot" }
                     "{phase.label()}"
@@ -558,4 +575,39 @@ fn log_level_class(level: LogLevel) -> &'static str {
         LogLevel::Success => "success",
         LogLevel::Info => "info",
     }
+}
+
+/// `Download · 412.0 MB of 1.0 GB · 48.2 MB/s · 18s left · 0m 09s` while downloading,
+/// `Restore data · gen_x.dump → gen_db · 1m 05s` afterwards.
+fn running_status_text(
+    job: &RestoreJob,
+    phase: RestorePhase,
+    download_progress: Option<DownloadProgress>,
+    elapsed: Duration,
+) -> String {
+    let took = format_duration(elapsed);
+    let Some(progress) = download_progress.filter(|_| phase == RestorePhase::Downloading) else {
+        return format!(
+            "{} · {} → {} · {took}",
+            phase.label(),
+            job.dump_name,
+            job.database
+        );
+    };
+
+    let mut parts = vec![
+        phase.label().to_string(),
+        format!(
+            "{} of {}",
+            format_size(progress.received_bytes),
+            format_size(progress.total_bytes)
+        ),
+    ];
+    if progress.received_bytes > 0 {
+        parts.push(format_speed(progress.bytes_per_second(elapsed)));
+    }
+    if let Some(remaining) = progress.time_remaining(elapsed) {
+        parts.push(format!("{} left", format_duration(remaining)));
+    }
+    parts.join(" · ")
 }

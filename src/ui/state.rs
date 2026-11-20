@@ -53,6 +53,8 @@ pub struct RestoreJob {
     pub dump_name: String,
     pub target_name: String,
     pub database: String,
+    /// "Refresh latest" downloads first; a manual sync starts at the restore script.
+    pub includes_download: bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -73,8 +75,12 @@ pub enum RestoreState {
         job: RestoreJob,
         started_at: Instant,
         phase: RestorePhase,
-        /// Known once the process has started; needed by Cancel.
+        /// Live progress while `phase` is `Downloading`.
+        download_progress: Option<DownloadProgress>,
+        /// Known once the restore script has started; Cancel stops it with a signal.
         process_group_id: Option<u32>,
+        /// The background task; Cancel drops it while no process is running yet (download).
+        task: Option<Task>,
     },
     Finished {
         job: RestoreJob,

@@ -11,6 +11,7 @@ use crate::ui::state::RestoreState;
 pub enum AppView {
     Download,
     Sync,
+    Help,
 }
 
 /// App-wide state, provided once by `App` and read anywhere with `use_app_context()`.

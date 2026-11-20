@@ -22,6 +22,29 @@ pub struct DatabaseTarget {
     /// Dumps named `<dump_group>_…` suggest this target, e.g. `gen`.
     pub dump_group: String,
     pub is_password_saved: bool,
+    /// Where "Refresh latest" looks for this database's newest dump.
+    pub dump_source: DumpSource,
+}
+
+/// An S3 location holding a database's dumps, for one-click "Refresh latest".
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct DumpSource {
+    pub profile: String,
+    pub bucket: String,
+    pub folder_prefix: String,
+    /// Optional: only dumps whose key contains this text (e.g. `gen_`).
+    pub name_filter: String,
+}
+
+impl DumpSource {
+    pub fn is_configured(&self) -> bool {
+        !self.profile.trim().is_empty() && !self.bucket.trim().is_empty()
+    }
+
+    pub fn s3_location(&self) -> String {
+        format!("s3://{}/{}", self.bucket.trim(), self.folder_prefix.trim())
+    }
 }
 
 impl Default for DatabaseTarget {
@@ -35,6 +58,7 @@ impl Default for DatabaseTarget {
             database: String::new(),
             dump_group: String::new(),
             is_password_saved: false,
+            dump_source: DumpSource::default(),
         }
     }
 }
@@ -174,6 +198,18 @@ mod tests {
 
         let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
         assert_eq!(names, vec!["General (local)", "madrasa"]);
+    }
+
+    #[test]
+    fn dump_source_needs_profile_and_bucket() {
+        let mut source = DumpSource::default();
+        assert!(!source.is_configured());
+
+        source.profile = "default".to_string();
+        source.bucket = " my-backups ".to_string();
+        source.folder_prefix = "prod/".to_string();
+        assert!(source.is_configured());
+        assert_eq!(source.s3_location(), "s3://my-backups/prod/");
     }
 
     #[test]
