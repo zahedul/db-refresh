@@ -119,7 +119,7 @@ mod tests {
     fn list_local_dumps_skips_partial_and_other_files() {
         let dir = env::temp_dir().join("db-refresh-list-test");
         fs::create_dir_all(&dir).unwrap();
-        for name in ["gen_1.dump", "mad_1.dump", "gen_2.dump.part", "notes.txt"] {
+        for name in ["prod_1.dump", "stg_1.dump", "prod_2.dump.part", "notes.txt"] {
             fs::write(dir.join(name), b"x").unwrap();
         }
 
@@ -129,7 +129,7 @@ mod tests {
             .collect();
         names.sort();
 
-        assert_eq!(names, vec!["gen_1.dump", "mad_1.dump"]);
+        assert_eq!(names, vec!["prod_1.dump", "stg_1.dump"]);
         fs::remove_dir_all(&dir).unwrap();
     }
 

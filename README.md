@@ -46,7 +46,7 @@ End-user documentation lives in [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) and i
 - **AWS profile picker** — reads profiles from `~/.aws/config` and `~/.aws/credentials`, including SSO profiles; `default` is pre-selected.
 - **Folder browser** — browse a bucket's "folders" (S3 common prefixes) in a popover with breadcrumbs and a filter; loads the root as soon as the bucket is entered.
 - **Search** — lists `.dump` objects under the chosen folder, optionally filtered by name; newest first, 10 at a time with *Show more / Show all*; stops after 50,000 objects on huge buckets.
-- **Smart list** — file size, relative age ("6h ago", exact UTC time on hover), **Latest** badge per dump group, coloured group tags (e.g. `GEN`, `MAD` from `gen_…`/`mad_…` file names), filter chips per group, and **✓ On disk** for files already downloaded.
+- **Smart list** — file size, relative age ("6h ago", exact UTC time on hover), **Latest** badge per dump group, coloured group tags (e.g. `PROD`, `STG` from `prod_…`/`stg_…` file names), filter chips per group, and **✓ On disk** for files already downloaded.
 - **Remembers your choices** — profile, bucket and folder survive restarts.
 
 ### Download
@@ -58,7 +58,7 @@ End-user documentation lives in [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) and i
 - **Download index** — remembers which S3 key was saved under which local name, so renamed files still show as on disk.
 
 ### Database targets
-- **Any number of databases** — host, port, user, database, optional display name and *dump prefix* (`gen` → matches `gen_*.dump`).
+- **Any number of databases** — host, port, user, database, optional display name and *dump prefix* (`prod` → matches `prod_*.dump`).
 - **Quick fill** — paste `postgres://user:pass@host:5432/db` (percent-encoding, IPv6 and query strings handled) to fill the form.
 - **Keychain passwords** — optional, encrypted by macOS, never written to the settings file; falls back to `~/.pgpass`.
 - **Touch ID** — before a saved password is used (restore, refresh, test connection), the app asks for your fingerprint via LocalAuthentication, falling back to the Mac password. On by default; a typed password never needs it.
@@ -160,7 +160,7 @@ The crate is one binary split into **domain modules** (no UI code, unit-tested) 
 | `database::connection_url` | `postgres://` URL parser for Quick fill. |
 | `database::restore` | Runs the embedded script, process-group cancel, `test_connection`, phase markers, ignored-error parsing. |
 | `database::log_line` | Log-line classification (error / warning / success / info). |
-| `dump_name` | Dump groups (`gen_…` → `gen`), prefixing, download-name validation. |
+| `dump_name` | Dump groups (`prod_…` → `prod`), prefixing, download-name validation. |
 | `local_files` | Download folder, local dump listing, "already on disk" check, reveal in Finder. |
 | `settings` | JSON settings with atomic writes (temp file + rename) and `#[serde(default)]` for forward compatibility. |
 | `format`, `clipboard`, `error` | Human-readable sizes/durations/ages, `pbcopy`, the `AppError` enum. |

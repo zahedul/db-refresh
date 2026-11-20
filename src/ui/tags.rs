@@ -1,7 +1,7 @@
 use crate::constants::TAG_COLOR_COUNT;
 use dioxus::prelude::*;
 
-/// Coloured pill for a dump group such as `gen` -> "GEN".
+/// Coloured pill for a dump group such as `prod` -> "PROD".
 #[component]
 pub fn GroupTag(group: String) -> Element {
     rsx! {
@@ -9,7 +9,7 @@ pub fn GroupTag(group: String) -> Element {
     }
 }
 
-/// Same group always gets the same colour, so GEN and MAD are easy to tell apart.
+/// Same group always gets the same colour, so PROD and STG are easy to tell apart.
 fn pick_tag_color_class(group: &str) -> String {
     let color_index = group.to_lowercase().bytes().map(u32::from).sum::<u32>() % TAG_COLOR_COUNT;
     format!("tag-color-{color_index}")
@@ -20,8 +20,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn tag_colors_are_stable_and_differ_for_gen_and_mad() {
-        assert_eq!(pick_tag_color_class("gen"), pick_tag_color_class("GEN"));
-        assert_ne!(pick_tag_color_class("gen"), pick_tag_color_class("mad"));
+    fn tag_colors_are_stable_and_differ_between_groups() {
+        assert_eq!(pick_tag_color_class("prod"), pick_tag_color_class("PROD"));
+        assert_ne!(pick_tag_color_class("prod"), pick_tag_color_class("stg"));
     }
 }

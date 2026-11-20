@@ -64,7 +64,7 @@ impl DumpFile {
         self.key.rsplit('/').next().unwrap_or(&self.key)
     }
 
-    /// See `extract_dump_group`: `gen_2026-11-20.dump` -> `gen`.
+    /// See `extract_dump_group`: `prod_2026-11-20.dump` -> `prod`.
     pub fn group(&self) -> Option<&str> {
         extract_dump_group(self.file_name())
     }
@@ -104,7 +104,7 @@ pub async fn search_dump_files(request: SearchRequest) -> Result<SearchResult, A
     })
 }
 
-/// Direct sub-folders of `parent_prefix` (`""` = bucket root), e.g. `["backups/gen/", "backups/mad/"]`.
+/// Direct sub-folders of `parent_prefix` (`""` = bucket root), e.g. `["backups/prod/", "backups/stg/"]`.
 pub async fn list_folders(
     profile: &str,
     bucket: &str,
@@ -263,9 +263,9 @@ mod tests {
 
     #[test]
     fn name_filter_is_case_insensitive_and_empty_matches_all() {
-        assert!(matches_name_filter("backups/GEN_2026.dump", "gen_"));
+        assert!(matches_name_filter("backups/PROD_2026.dump", "prod_"));
         assert!(matches_name_filter("anything", ""));
-        assert!(!matches_name_filter("backups/mad_2026.dump", "gen_"));
+        assert!(!matches_name_filter("backups/stg_2026.dump", "prod_"));
     }
 
     #[test]
@@ -289,8 +289,8 @@ mod tests {
     #[test]
     fn group_is_file_name_prefix_before_underscore() {
         assert_eq!(
-            dump_file("backups/gen_2026.dump", None).group(),
-            Some("gen")
+            dump_file("backups/prod_2026.dump", None).group(),
+            Some("prod")
         );
         assert_eq!(dump_file("2026-11-02T040006.dump", None).group(), None);
         assert_eq!(dump_file("_odd.dump", None).group(), None);
@@ -299,28 +299,28 @@ mod tests {
     #[test]
     fn latest_file_per_group_picks_first_of_each_group() {
         let files = vec![
-            dump_file("gen_3.dump", Some(3)),
-            dump_file("mad_3.dump", Some(3)),
-            dump_file("gen_2.dump", Some(2)),
+            dump_file("prod_3.dump", Some(3)),
+            dump_file("stg_3.dump", Some(3)),
+            dump_file("prod_2.dump", Some(2)),
             dump_file("plain.dump", Some(1)),
         ];
         let latest = find_latest_file_per_group(&files);
         assert_eq!(
             latest,
-            HashSet::from(["gen_3.dump", "mad_3.dump", "plain.dump"])
+            HashSet::from(["prod_3.dump", "stg_3.dump", "plain.dump"])
         );
     }
 
     #[test]
     fn file_name_strips_folders() {
-        assert_eq!(dump_file("a/b/gen.dump", None).file_name(), "gen.dump");
-        assert_eq!(dump_file("gen.dump", None).file_name(), "gen.dump");
+        assert_eq!(dump_file("a/b/prod.dump", None).file_name(), "prod.dump");
+        assert_eq!(dump_file("prod.dump", None).file_name(), "prod.dump");
     }
 
     #[test]
     fn folder_placeholders_are_not_dump_files() {
         let folder = Object::builder().key("backups/").build();
-        let file = Object::builder().key("backups/gen.dump").size(42).build();
+        let file = Object::builder().key("backups/prod.dump").size(42).build();
         assert_eq!(DumpFile::from_s3_object(&folder), None);
         assert_eq!(
             DumpFile::from_s3_object(&file).map(|f| f.size_bytes),
@@ -334,10 +334,10 @@ mod tests {
             profile: " default ".to_string(),
             bucket: "  my-bucket ".to_string(),
             prefix: " backups/ ".to_string(),
-            name_filter: " gen_ ".to_string(),
+            name_filter: " prod_ ".to_string(),
         }
         .trimmed();
         assert_eq!(request.s3_location(), "s3://my-bucket/backups/");
-        assert_eq!(request.name_filter, "gen_");
+        assert_eq!(request.name_filter, "prod_");
     }
 }

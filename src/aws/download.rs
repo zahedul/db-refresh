@@ -494,10 +494,10 @@ mod tests {
 
     #[test]
     fn partial_path_appends_suffix() {
-        let destination = Path::new("/tmp/gen_2026.dump");
+        let destination = Path::new("/tmp/prod_2026.dump");
         assert_eq!(
             build_partial_path(destination),
-            Path::new("/tmp/gen_2026.dump.part")
+            Path::new("/tmp/prod_2026.dump.part")
         );
     }
 

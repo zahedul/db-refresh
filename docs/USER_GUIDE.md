@@ -53,7 +53,7 @@ Repeat for every database you refresh (for example one per project, or staging a
 
 ### What is a "Dump prefix"?
 
-If your dump files are named like `gen_2026-11-20.dump` and `mad_2026-11-20.dump`, the part before the `_` tells which database they belong to. Give each database its prefix (`gen`, `mad`) and DB Refresh picks the right database automatically whenever you choose such a file.
+If your dump files are named like `prod_2026-11-20.dump` and `stg_2026-11-20.dump`, the part before the `_` tells which database they belong to. Give each database its prefix (`prod`, `stg`) and DB Refresh picks the right database automatically whenever you choose such a file.
 
 Your dumps don't have a prefix? You can add one when downloading (see *Quick names* below).
 
@@ -83,7 +83,7 @@ No **Refresh latest** button? Click **Set up one-click refresh →** on the data
 1. In **S3 source**, pick your **AWS profile**.
 2. Type the **Bucket** name and press Enter. Bucket names are always lowercase; the app corrects capitals for you.
 3. Click the **Folder** button to browse into the bucket's folders. Click a folder to go inside, then **Use "…"** to select it. Breadcrumbs at the top take you back up.
-4. Optionally type **Name contains** (e.g. `gen_`) to filter.
+4. Optionally type **Name contains** (e.g. `prod_`) to filter.
 5. Click **Search dumps** (or press Enter in *Name contains*).
 
 Your bucket, folder and profile are remembered for next time.
@@ -91,7 +91,7 @@ Your bucket, folder and profile are remembered for next time.
 ### The Backups list
 
 - The newest **10 dumps** are shown first; use **Show 10 more** or **Show all** for older ones.
-- **Latest** marks the newest dump of each kind. Coloured tags (e.g. **GEN**, **MAD**) show the dump prefix.
+- **Latest** marks the newest dump of each kind. Coloured tags (e.g. **PROD**, **STG**) show the dump prefix.
 - Hover the age (e.g. *6h ago*) to see the exact time.
 - **✓ On disk** means the file is already downloaded.
 
@@ -100,7 +100,7 @@ Your bucket, folder and profile are remembered for next time.
 Click **↓ Download** on a dump. A dialog opens:
 
 - **Save as** - change the file name if you like. `.dump` is added if you leave it out.
-- **Quick names** - one click adds a database's prefix, e.g. `2026-11-20.dump` → `gen_2026-11-20.dump`, so the Sync tab recognises it.
+- **Quick names** - one click adds a database's prefix, e.g. `2026-11-20.dump` → `prod_2026-11-20.dump`, so the Sync tab recognises it.
 - A warning appears if a file with that name already exists.
 
 Click **Download**. The **Downloads** panel at the bottom shows progress, speed and time left. You can **Cancel**, **Retry**, **Show in Finder**, or go straight to restoring with **⇄ Sync to database…**.

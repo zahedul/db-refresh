@@ -119,18 +119,18 @@ mod tests {
         let settings = Settings {
             profile: Some("default".to_string()),
             bucket: "my-backups".to_string(),
-            folder_prefix: "backups/gen/".to_string(),
+            folder_prefix: "backups/prod/".to_string(),
             database_targets: vec![DatabaseTarget {
                 id: "target-1".to_string(),
-                name: "General local".to_string(),
+                name: "Production local".to_string(),
                 user: "app_user".to_string(),
-                database: "gen_app_db".to_string(),
-                dump_group: "gen".to_string(),
+                database: "prod_app_db".to_string(),
+                dump_group: "prod".to_string(),
                 ..DatabaseTarget::default()
             }],
             downloaded_files: BTreeMap::from([(
                 "backups/2026-11-20.dump".to_string(),
-                "gen_2026-11-20.dump".to_string(),
+                "prod_2026-11-20.dump".to_string(),
             )]),
             custom_download_folder: Some(PathBuf::from("/Volumes/Backups/dumps")),
         };
@@ -146,13 +146,13 @@ mod tests {
         let settings = Settings {
             downloaded_files: BTreeMap::from([(
                 "backups/2026.dump".to_string(),
-                "gen_2026.dump".to_string(),
+                "prod_2026.dump".to_string(),
             )]),
             ..Settings::default()
         };
         assert_eq!(
             settings.local_file_name("backups/2026.dump", "2026.dump"),
-            "gen_2026.dump"
+            "prod_2026.dump"
         );
         assert_eq!(
             settings.local_file_name("backups/other.dump", "other.dump"),

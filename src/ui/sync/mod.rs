@@ -48,16 +48,18 @@ mod tests {
     fn warning_matches_the_restore_mode() {
         let warning_for = |restore_mode| {
             describe_data_loss(&DatabaseTarget {
-                database: "gen_db".to_string(),
+                database: "prod_db".to_string(),
                 restore_mode,
                 ..DatabaseTarget::default()
             })
         };
         assert!(warning_for(RestoreMode::ReplaceObjects).contains("pg_restore --clean"));
-        assert!(warning_for(RestoreMode::DropSchemas).contains("dropped from gen_db with CASCADE"));
+        assert!(
+            warning_for(RestoreMode::DropSchemas).contains("dropped from prod_db with CASCADE")
+        );
         assert!(
             warning_for(RestoreMode::RecreateDatabase)
-                .starts_with("gen_db is deleted and created again")
+                .starts_with("prod_db is deleted and created again")
         );
     }
 }

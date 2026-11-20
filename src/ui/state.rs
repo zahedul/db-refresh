@@ -120,9 +120,9 @@ mod tests {
 
     fn job(is_download_included: bool, restore_mode: RestoreMode) -> RestoreJob {
         RestoreJob {
-            dump_name: "gen.dump".to_string(),
-            target_name: "General".to_string(),
-            database: "gen_db".to_string(),
+            dump_name: "prod.dump".to_string(),
+            target_name: "Production".to_string(),
+            database: "prod_db".to_string(),
             is_download_included,
             restore_mode,
         }

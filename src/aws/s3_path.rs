@@ -1,15 +1,15 @@
-//! Pure helpers for S3 "folder" prefixes such as `backups/gen/`.
+//! Pure helpers for S3 "folder" prefixes such as `backups/prod/`.
 
 use crate::constants::{S3_FOLDER_SEPARATOR, WHOLE_BUCKET_LABEL};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Breadcrumb {
     pub label: String,
-    /// Prefix to browse to when this crumb is clicked, e.g. `backups/gen/`.
+    /// Prefix to browse to when this crumb is clicked, e.g. `backups/prod/`.
     pub prefix: String,
 }
 
-/// `"backups/gen/"` -> `[backups -> "backups/", gen -> "backups/gen/"]`
+/// `"backups/prod/"` -> `[backups -> "backups/", prod -> "backups/prod/"]`
 pub fn build_breadcrumbs(prefix: &str) -> Vec<Breadcrumb> {
     let mut crumbs = Vec::new();
     let mut prefix_so_far = String::new();
@@ -30,7 +30,7 @@ pub fn build_breadcrumbs(prefix: &str) -> Vec<Breadcrumb> {
     crumbs
 }
 
-/// `"backups/gen/"` -> `"backups / gen"`, `""` -> `"Whole bucket"`
+/// `"backups/prod/"` -> `"backups / prod"`, `""` -> `"Whole bucket"`
 pub fn display_path(prefix: &str) -> String {
     let labels: Vec<String> = build_breadcrumbs(prefix)
         .into_iter()
@@ -43,7 +43,7 @@ pub fn display_path(prefix: &str) -> String {
     labels.join(" / ")
 }
 
-/// `("backups/gen/", "backups/")` -> `"gen"`
+/// `("backups/prod/", "backups/")` -> `"prod"`
 pub fn extract_folder_name<'a>(folder_prefix: &'a str, parent_prefix: &str) -> &'a str {
     folder_prefix
         .strip_prefix(parent_prefix)
@@ -69,8 +69,8 @@ mod tests {
     #[test]
     fn breadcrumbs_build_cumulative_prefixes() {
         assert_eq!(
-            build_breadcrumbs("backups/gen/"),
-            vec![crumb("backups", "backups/"), crumb("gen", "backups/gen/")]
+            build_breadcrumbs("backups/prod/"),
+            vec![crumb("backups", "backups/"), crumb("prod", "backups/prod/")]
         );
         assert!(build_breadcrumbs("").is_empty());
     }
@@ -85,19 +85,19 @@ mod tests {
 
     #[test]
     fn display_path_joins_labels_or_names_whole_bucket() {
-        assert_eq!(display_path("backups/gen/"), "backups / gen");
+        assert_eq!(display_path("backups/prod/"), "backups / prod");
         assert_eq!(display_path(""), "Whole bucket");
     }
 
     #[test]
     fn folder_name_strips_parent_and_trailing_slash() {
-        assert_eq!(extract_folder_name("backups/gen/", "backups/"), "gen");
+        assert_eq!(extract_folder_name("backups/prod/", "backups/"), "prod");
         assert_eq!(extract_folder_name("backups/", ""), "backups");
     }
 
     #[test]
     fn contains_ignoring_case_matches_any_case() {
-        assert!(contains_ignoring_case("Backups/GEN_2026.dump", "gen_"));
-        assert!(!contains_ignoring_case("mad_2026.dump", "gen_"));
+        assert!(contains_ignoring_case("Backups/PROD_2026.dump", "prod_"));
+        assert!(!contains_ignoring_case("stg_2026.dump", "prod_"));
     }
 }

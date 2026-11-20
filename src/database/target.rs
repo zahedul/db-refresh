@@ -17,7 +17,7 @@ pub struct DatabaseTarget {
     pub port: u16,
     pub user: String,
     pub database: String,
-    /// Dumps named `<dump_group>_…` suggest this target, e.g. `gen`.
+    /// Dumps named `<dump_group>_…` suggest this target, e.g. `prod`.
     pub dump_group: String,
     pub is_password_saved: bool,
     /// Ask for Touch ID (or the Mac password) before the saved password is used.
@@ -101,7 +101,7 @@ pub struct DumpSource {
     pub profile: String,
     pub bucket: String,
     pub folder_prefix: String,
-    /// Optional: only dumps whose key contains this text (e.g. `gen_`).
+    /// Optional: only dumps whose key contains this text (e.g. `prod_`).
     pub name_filter: String,
 }
 
@@ -224,9 +224,9 @@ mod tests {
 
     #[test]
     fn suggest_target_matches_dump_prefix_ignoring_case() {
-        let targets = vec![target("general", "gen"), target("madrasa", "MAD")];
-        let suggested = suggest_target(&targets, "mad_2026-11-20.dump").map(|t| t.name.as_str());
-        assert_eq!(suggested, Some("madrasa"));
+        let targets = vec![target("production", "prod"), target("staging", "STG")];
+        let suggested = suggest_target(&targets, "stg_2026-11-20.dump").map(|t| t.name.as_str());
+        assert_eq!(suggested, Some("staging"));
         assert_eq!(suggest_target(&targets, "other_2026.dump"), None);
         assert_eq!(suggest_target(&targets, "2026-11-02.dump"), None);
     }
@@ -234,12 +234,12 @@ mod tests {
     #[test]
     fn suggest_target_ignores_targets_without_group() {
         let targets = vec![target("anything", "")];
-        assert_eq!(suggest_target(&targets, "gen_2026.dump"), None);
+        assert_eq!(suggest_target(&targets, "prod_2026.dump"), None);
     }
 
     #[test]
     fn validate_names_the_first_missing_field() {
-        let mut draft = target("general", "gen");
+        let mut draft = target("production", "prod");
         assert_eq!(draft.validate(), Ok(()));
 
         draft.user = String::new();
@@ -251,24 +251,24 @@ mod tests {
 
     #[test]
     fn connection_label_shows_where_data_goes() {
-        let general = target("general", "gen");
+        let production = target("production", "prod");
         assert_eq!(
-            general.connection_label(),
-            "app_user@localhost:5432/general_db"
+            production.connection_label(),
+            "app_user@localhost:5432/production_db"
         );
     }
 
     #[test]
     fn upsert_replaces_same_id_and_appends_new() {
-        let mut targets = vec![target("general", "gen")];
+        let mut targets = vec![target("production", "prod")];
 
-        let mut renamed = target("general", "gen");
-        renamed.name = "General (local)".to_string();
+        let mut renamed = target("production", "prod");
+        renamed.name = "Production (local)".to_string();
         upsert_target(&mut targets, renamed);
-        upsert_target(&mut targets, target("madrasa", "mad"));
+        upsert_target(&mut targets, target("staging", "stg"));
 
         let names: Vec<&str> = targets.iter().map(|t| t.name.as_str()).collect();
-        assert_eq!(names, vec!["General (local)", "madrasa"]);
+        assert_eq!(names, vec!["Production (local)", "staging"]);
     }
 
     #[test]

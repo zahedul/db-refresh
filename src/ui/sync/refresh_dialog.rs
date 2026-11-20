@@ -229,12 +229,12 @@ mod tests {
     #[test]
     fn refresh_file_name_reuses_earlier_name_then_adds_prefix() {
         assert_eq!(
-            choose_refresh_file_name(Some("mine.dump"), "2026.dump", "gen"),
+            choose_refresh_file_name(Some("mine.dump"), "2026.dump", "prod"),
             "mine.dump"
         );
         assert_eq!(
-            choose_refresh_file_name(None, "2026.dump", "gen"),
-            "gen_2026.dump"
+            choose_refresh_file_name(None, "2026.dump", "prod"),
+            "prod_2026.dump"
         );
         assert_eq!(choose_refresh_file_name(None, "2026.dump", ""), "2026.dump");
     }

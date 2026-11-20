@@ -98,7 +98,7 @@ pub fn DownloadDialog(
                 }
                 if suggestions.is_empty() {
                     span { class: "field-hint",
-                        "Tip: give a database a Dump prefix (e.g. gen) on the Sync tab. "
+                        "Tip: give a database a Dump prefix (e.g. prod) on the Sync tab. "
                         "You'll get a one-click name here, and dumps named that way select their database automatically."
                     }
                 } else {
@@ -181,22 +181,22 @@ mod tests {
     #[test]
     fn suggestions_come_from_distinct_dump_prefixes() {
         let targets = vec![
-            target("General", "gen"),
-            target("General copy", "gen"),
-            target("Madrasa", "mad"),
+            target("Production", "prod"),
+            target("Production copy", "prod"),
+            target("Staging", "stg"),
             target("No prefix", ""),
         ];
 
         let suggestions = suggest_file_names(&targets, "2026-11-20.dump");
 
         let names: Vec<&str> = suggestions.iter().map(|s| s.file_name.as_str()).collect();
-        assert_eq!(names, vec!["gen_2026-11-20.dump", "mad_2026-11-20.dump"]);
-        assert_eq!(suggestions[0].label, "General · gen_");
+        assert_eq!(names, vec!["prod_2026-11-20.dump", "stg_2026-11-20.dump"]);
+        assert_eq!(suggestions[0].label, "Production · prod_");
     }
 
     #[test]
     fn no_suggestion_when_name_already_has_the_prefix() {
-        let suggestions = suggest_file_names(&[target("General", "gen")], "gen_2026.dump");
+        let suggestions = suggest_file_names(&[target("Production", "prod")], "prod_2026.dump");
         assert!(suggestions.is_empty());
     }
 }

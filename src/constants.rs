@@ -73,7 +73,7 @@ pub const PARTIAL_FILE_SUFFIX: &str = ".part";
 pub const DUMP_EXTENSION: &str = "dump";
 /// Extensions offered by "Choose another file…".
 pub const PICKABLE_DUMP_EXTENSIONS: [&str; 2] = ["dump", "backup"];
-/// `gen_2026-11-20.dump` belongs to group `gen`.
+/// `prod_2026-11-20.dump` belongs to group `prod`.
 pub const DUMP_GROUP_SEPARATOR: char = '_';
 
 // ===== Databases and restore =====

@@ -28,7 +28,7 @@ pub struct AppContext {
 }
 
 impl AppContext {
-    /// Selects the dump and, if one matches its name (`gen_…` -> target with group `gen`),
+    /// Selects the dump and, if one matches its name (`prod_…` -> target with group `prod`),
     /// the database it should go to.
     pub fn select_dump(mut self, dump_path: PathBuf) {
         let file_name = dump_path

@@ -598,7 +598,7 @@ fn pick_log_level_class(level: LogLevel) -> &'static str {
 }
 
 /// `Download · 412.0 MB of 1.0 GB · 48.2 MB/s · 18s left · 0m 09s` while downloading,
-/// `Restore data · gen_x.dump → gen_db · 1m 05s` afterwards.
+/// `Restore data · prod_x.dump → prod_db · 1m 05s` afterwards.
 fn format_running_status(
     job: &RestoreJob,
     phase: RestorePhase,
