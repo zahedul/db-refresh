@@ -21,6 +21,19 @@ pub fn format_size(size_bytes: u64) -> String {
     format!("{value:.1} {}", SIZE_UNITS[unit_index])
 }
 
+/// `12431` -> `"12,431"`
+pub fn format_count(count: usize) -> String {
+    let digits = count.to_string();
+    let mut grouped = String::with_capacity(digits.len() + digits.len() / 3);
+    for (index, digit) in digits.chars().enumerate() {
+        if index > 0 && (digits.len() - index).is_multiple_of(3) {
+            grouped.push(',');
+        }
+        grouped.push(digit);
+    }
+    grouped
+}
+
 pub fn format_speed(bytes_per_second: f64) -> String {
     format!("{}/s", format_size(bytes_per_second as u64))
 }
@@ -117,6 +130,15 @@ mod tests {
         assert_eq!(format_relative_age(0, now), "1970-01-01");
         // A clock slightly behind S3 must not show a negative age.
         assert_eq!(format_relative_age(now + 30, now), "just now");
+    }
+
+    #[test]
+    fn format_count_groups_thousands() {
+        assert_eq!(format_count(0), "0");
+        assert_eq!(format_count(999), "999");
+        assert_eq!(format_count(5_000), "5,000");
+        assert_eq!(format_count(12_431), "12,431");
+        assert_eq!(format_count(1_234_567), "1,234,567");
     }
 
     #[test]

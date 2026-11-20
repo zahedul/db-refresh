@@ -3,7 +3,7 @@ use std::time::{Duration, Instant};
 use dioxus::prelude::*;
 
 use crate::database::connection_url::{ConnectionUrl, parse_connection_url};
-use crate::database::credentials::{delete_password, password_for, save_password};
+use crate::database::credentials::{delete_password, save_password, unlock_password};
 use crate::database::restore::test_connection;
 use crate::database::target::{DatabaseTarget, DumpSource, upsert_target};
 use crate::error::AppError;
@@ -35,6 +35,8 @@ struct TargetFields {
     source_bucket: Signal<String>,
     source_folder: Signal<String>,
     source_name_filter: Signal<String>,
+    recreate_database: Signal<bool>,
+    require_touch_id: Signal<bool>,
 }
 
 impl TargetFields {
@@ -49,6 +51,8 @@ impl TargetFields {
             user: (self.user)(),
             database: (self.database)(),
             dump_group: (self.dump_group)(),
+            recreate_database: (self.recreate_database)(),
+            require_touch_id: (self.require_touch_id)(),
             dump_source: DumpSource {
                 profile: (self.source_profile)().trim().to_string(),
                 bucket: (self.source_bucket)().trim().to_lowercase(),
@@ -123,6 +127,8 @@ pub fn TargetFormDialog(
         source_bucket: use_signal(|| draft.dump_source.bucket.clone()),
         source_folder: use_signal(|| draft.dump_source.folder_prefix.clone()),
         source_name_filter: use_signal(|| draft.dump_source.name_filter.clone()),
+        recreate_database: use_signal(|| draft.recreate_database),
+        require_touch_id: use_signal(|| draft.require_touch_id),
     };
     let mut should_save_password = use_signal(|| is_new || draft.is_password_saved);
     let mut is_password_visible = use_signal(|| false);
@@ -133,11 +139,8 @@ pub fn TargetFormDialog(
     let run_connection_test = {
         let draft = draft.clone();
         move |_| {
-            let checked_target = fields
-                .to_target(&draft)
-                .and_then(|target| Ok((password_for(&target, &(fields.password)())?, target)));
-            let (password, target) = match checked_target {
-                Ok(values) => values,
+            let target = match fields.to_target(&draft) {
+                Ok(target) => target,
                 Err(error) => {
                     connection_check.set(ConnectionCheck::Failed(error.to_string()));
                     return;
@@ -145,6 +148,13 @@ pub fn TargetFormDialog(
             };
             connection_check.set(ConnectionCheck::Checking);
             spawn(async move {
+                let password = match unlock_password(&target, &(fields.password)()).await {
+                    Ok(password) => password,
+                    Err(error) => {
+                        connection_check.set(ConnectionCheck::Failed(error.to_string()));
+                        return;
+                    }
+                };
                 let started_at = Instant::now();
                 let next_check = match test_connection(&target, password.as_deref()).await {
                     Ok(()) => ConnectionCheck::Succeeded {
@@ -282,6 +292,23 @@ pub fn TargetFormDialog(
                         span { class: "field-hint", "Stored encrypted by macOS, never in the settings file." }
                     }
                 }
+                if should_save_password() {
+                    label { class: "switch",
+                        input {
+                            r#type: "checkbox",
+                            checked: (fields.require_touch_id)(),
+                            onchange: move |event| {
+                                let mut require_touch_id = fields.require_touch_id;
+                                require_touch_id.set(event.checked());
+                            },
+                        }
+                        span { class: "switch-track", span { class: "switch-thumb" } }
+                        span { class: "switch-text",
+                            span { "Ask for Touch ID before using it" }
+                            span { class: "field-hint", "Falls back to your Mac password when Touch ID isn't available." }
+                        }
+                    }
+                }
             }
 
             FormSection { title: "Display",
@@ -291,6 +318,27 @@ pub fn TargetFormDialog(
                     }
                     FormField { label: "Dump prefix", hint: "prod_… dumps pick this database.",
                         PlainTextInput { value: fields.dump_group, placeholder: "prod" }
+                    }
+                }
+            }
+
+            FormSection { title: "Restore",
+                label { class: "switch",
+                    input {
+                        r#type: "checkbox",
+                        checked: (fields.recreate_database)(),
+                        onchange: move |event| {
+                            let mut recreate_database = fields.recreate_database;
+                            recreate_database.set(event.checked());
+                        },
+                    }
+                    span { class: "switch-track", span { class: "switch-thumb" } }
+                    span { class: "switch-text",
+                        span { "Start from an empty database" }
+                        span { class: "field-hint",
+                            "Deletes and recreates the database before each restore, so it becomes an exact copy of the dump. "
+                            "Needs a user that owns the database and may create databases."
+                        }
                     }
                 }
             }

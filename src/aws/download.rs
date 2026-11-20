@@ -1,18 +1,37 @@
-use std::path::{Path, PathBuf};
-use std::time::{Duration, Instant};
+//! Downloads S3 objects in parallel byte ranges, straight to disk.
 
+use std::cell::Cell;
+use std::fs::{self, File};
+use std::os::unix::fs::FileExt;
+use std::path::{Path, PathBuf};
+use std::pin::pin;
+use std::sync::Arc;
+use std::time::Duration;
+
+use aws_sdk_s3::Client;
+use aws_sdk_s3::config::http::HttpResponse;
 use aws_sdk_s3::error::{DisplayErrorContext, ProvideErrorMetadata, SdkError};
 use aws_sdk_s3::operation::get_object::GetObjectError;
-use tokio::fs::{self, File};
-use tokio::io::{AsyncWriteExt, BufWriter};
+use aws_sdk_s3::operation::head_object::HeadObjectError;
+use futures_util::{StreamExt, stream};
 
 use crate::aws::s3::build_client;
 use crate::error::AppError;
 
-const WRITE_BUFFER_BYTES: usize = 1024 * 1024;
+/// 8 MiB parts × 8 at a time: a 1 GB dump is 128 parts with 8 requests in flight.
+/// Several connections fill the bandwidth far better than one long stream.
+const PART_SIZE_BYTES: u64 = 8 * 1024 * 1024;
+const MAX_PARALLEL_PARTS: usize = 8;
+/// A failed part (e.g. a dropped connection) is retried alone, not the whole file.
+const MAX_PART_ATTEMPTS: u32 = 3;
+const PART_RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
+/// Received data is written in batches to keep disk writes few and large.
+const WRITE_BATCH_BYTES: usize = 1024 * 1024;
 // Progress callbacks drive UI redraws; a few per second is smooth without wasting CPU.
 const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
 const PARTIAL_FILE_SUFFIX: &str = ".part";
+const HTTP_FORBIDDEN: u16 = 403;
+const HTTP_PRECONDITION_FAILED: u16 = 412;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DownloadRequest {
@@ -61,105 +80,260 @@ impl DownloadProgress {
     }
 }
 
-/// Streams an S3 object to `request.destination` without holding it in memory.
+/// Size and version of the object, read once before the parts are fetched.
+struct ObjectInfo {
+    size_bytes: u64,
+    /// Every part is requested with `If-Match: <etag>`, so a file replaced mid-download
+    /// fails clearly instead of mixing two versions.
+    e_tag: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct ByteRange {
+    start: u64,
+    end_inclusive: u64,
+}
+
+impl ByteRange {
+    fn len(self) -> u64 {
+        self.end_inclusive - self.start + 1
+    }
+
+    /// HTTP `Range` header value, e.g. `bytes=0-8388607`.
+    fn header_value(self) -> String {
+        format!("bytes={}-{}", self.start, self.end_inclusive)
+    }
+}
+
+/// Downloads an S3 object to `request.destination` in parallel byte ranges.
 ///
 /// Data goes to `<destination>.part` first and is renamed only when complete, so a
 /// half-finished file never looks like a real dump. If the returned future is dropped
-/// (the user pressed Cancel), the partial file is deleted.
+/// (the user pressed Cancel), every request stops and the partial file is deleted.
 pub async fn download_dump_file(
     request: &DownloadRequest,
     mut on_progress: impl FnMut(DownloadProgress),
 ) -> Result<(), AppError> {
     let client = build_client(&request.profile).await?;
-    let mut object = client
-        .get_object()
+    let object = describe_object(&client, request).await?;
+    let total_bytes = object.size_bytes;
+    on_progress(DownloadProgress {
+        received_bytes: 0,
+        total_bytes,
+    });
+
+    let partial_file = PartialFile::create(&request.destination, total_bytes)?;
+    // All parts run inside this one task, so a plain `Cell` can count their bytes.
+    let received_bytes = Cell::new(0_u64);
+    let part_target = PartTarget {
+        client: &client,
+        request,
+        e_tag: object.e_tag.as_deref(),
+        file: &partial_file,
+        received_bytes: &received_bytes,
+    };
+
+    download_all_parts(part_target, total_bytes, &mut on_progress).await?;
+
+    let final_progress = DownloadProgress {
+        received_bytes: received_bytes.get(),
+        total_bytes,
+    };
+    if final_progress.received_bytes != total_bytes {
+        return Err(AppError::IncompleteDownload {
+            received_bytes: final_progress.received_bytes,
+            expected_bytes: total_bytes,
+        });
+    }
+    partial_file.finish(&request.destination)?;
+    on_progress(final_progress);
+    Ok(())
+}
+
+/// Runs up to `MAX_PARALLEL_PARTS` part downloads at a time, reporting progress on a timer.
+async fn download_all_parts(
+    part_target: PartTarget<'_>,
+    total_bytes: u64,
+    on_progress: &mut impl FnMut(DownloadProgress),
+) -> Result<(), AppError> {
+    let mut parts = pin!(
+        stream::iter(part_ranges(total_bytes, PART_SIZE_BYTES))
+            .map(|range| part_target.download_with_retries(range))
+            .buffer_unordered(MAX_PARALLEL_PARTS)
+    );
+    let mut progress_ticker = tokio::time::interval(PROGRESS_INTERVAL);
+    loop {
+        tokio::select! {
+            finished_part = parts.next() => match finished_part {
+                Some(result) => result?,
+                None => return Ok(()),
+            },
+            _ = progress_ticker.tick() => on_progress(DownloadProgress {
+                received_bytes: part_target.received_bytes.get(),
+                total_bytes,
+            }),
+        }
+    }
+}
+
+/// Splits `total_bytes` into consecutive ranges of at most `part_size` bytes.
+fn part_ranges(total_bytes: u64, part_size: u64) -> Vec<ByteRange> {
+    (0..total_bytes)
+        .step_by(part_size as usize)
+        .map(|start| ByteRange {
+            start,
+            end_inclusive: (start + part_size).min(total_bytes) - 1,
+        })
+        .collect()
+}
+
+async fn describe_object(
+    client: &Client,
+    request: &DownloadRequest,
+) -> Result<ObjectInfo, AppError> {
+    let head = client
+        .head_object()
         .bucket(&request.bucket)
         .key(&request.key)
         .send()
         .await
-        .map_err(|error| to_download_error(error, request))?;
+        .map_err(|error| to_head_error(error, request))?;
 
-    let total_bytes = object
+    let size_bytes = head
         .content_length()
         .and_then(|length| u64::try_from(length).ok())
-        .unwrap_or(0);
-    let mut progress = DownloadProgress {
-        received_bytes: 0,
-        total_bytes,
-    };
-    on_progress(progress);
+        .ok_or_else(|| AppError::Download("S3 did not report the file size.".to_string()))?;
+    Ok(ObjectInfo {
+        size_bytes,
+        e_tag: head.e_tag().map(str::to_string),
+    })
+}
 
-    let mut partial_file = PartialFile::create(&request.destination).await?;
-    let mut last_reported_at = Instant::now();
+/// What every part download shares.
+#[derive(Clone, Copy)]
+struct PartTarget<'a> {
+    client: &'a Client,
+    request: &'a DownloadRequest,
+    e_tag: Option<&'a str>,
+    file: &'a PartialFile,
+    received_bytes: &'a Cell<u64>,
+}
 
-    while let Some(chunk) = object
-        .body
-        .try_next()
-        .await
-        .map_err(|error| AppError::Download(DisplayErrorContext(&error).to_string()))?
-    {
-        partial_file.write(&chunk).await?;
-        progress.received_bytes += chunk.len() as u64;
-
-        if last_reported_at.elapsed() >= PROGRESS_INTERVAL {
-            on_progress(progress);
-            last_reported_at = Instant::now();
+impl PartTarget<'_> {
+    async fn download_with_retries(self, range: ByteRange) -> Result<(), AppError> {
+        let mut attempt = 1;
+        loop {
+            let mut received_this_attempt = 0;
+            let result = self.download(range, &mut received_this_attempt).await;
+            let error = match result {
+                Ok(()) => return Ok(()),
+                Err(error) => error,
+            };
+            if attempt >= MAX_PART_ATTEMPTS || !is_retryable(&error) {
+                return Err(error);
+            }
+            // The retry fetches the whole part again, so take back what this attempt counted.
+            self.received_bytes
+                .set(self.received_bytes.get() - received_this_attempt);
+            tokio::time::sleep(PART_RETRY_BASE_DELAY * attempt).await;
+            attempt += 1;
         }
     }
 
-    if total_bytes > 0 && progress.received_bytes != total_bytes {
-        return Err(AppError::IncompleteDownload {
-            received_bytes: progress.received_bytes,
-            expected_bytes: total_bytes,
-        });
-    }
+    async fn download(
+        self,
+        range: ByteRange,
+        received_this_attempt: &mut u64,
+    ) -> Result<(), AppError> {
+        let mut response = self
+            .client
+            .get_object()
+            .bucket(&self.request.bucket)
+            .key(&self.request.key)
+            .range(range.header_value())
+            .set_if_match(self.e_tag.map(str::to_string))
+            .send()
+            .await
+            .map_err(|error| to_download_error(error, self.request))?;
 
-    partial_file.finish(&request.destination).await?;
-    on_progress(progress);
-    Ok(())
+        let mut write_offset = range.start;
+        let mut batch = Vec::with_capacity(WRITE_BATCH_BYTES);
+        while let Some(chunk) = response
+            .body
+            .try_next()
+            .await
+            .map_err(|error| AppError::Download(DisplayErrorContext(&error).to_string()))?
+        {
+            batch.extend_from_slice(&chunk);
+            *received_this_attempt += chunk.len() as u64;
+            self.received_bytes
+                .set(self.received_bytes.get() + chunk.len() as u64);
+            if batch.len() >= WRITE_BATCH_BYTES {
+                write_offset = self.file.write_batch(write_offset, &mut batch).await?;
+            }
+        }
+        write_offset = self.file.write_batch(write_offset, &mut batch).await?;
+
+        if write_offset - range.start != range.len() {
+            return Err(AppError::Download(format!(
+                "Part {} ended early.",
+                range.header_value()
+            )));
+        }
+        Ok(())
+    }
 }
 
-/// A `<name>.part` file that deletes itself unless `finish` succeeds.
+/// Network hiccups are worth retrying; a missing file, no access or a replaced file is not.
+fn is_retryable(error: &AppError) -> bool {
+    matches!(error, AppError::Download(_))
+}
+
+/// A pre-sized `<name>.part` file that parts write into at their own offsets.
+/// It deletes itself unless `finish` succeeds.
 struct PartialFile {
     path: PathBuf,
-    writer: BufWriter<File>,
+    file: Arc<File>,
     is_finished: bool,
 }
 
 impl PartialFile {
-    async fn create(destination: &Path) -> Result<Self, AppError> {
+    fn create(destination: &Path, size_bytes: u64) -> Result<Self, AppError> {
         if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent)
-                .await
-                .map_err(|error| file_system_error(parent, &error))?;
+            fs::create_dir_all(parent).map_err(|error| file_system_error(parent, &error))?;
         }
-
         let path = partial_path_for(destination);
-        let file = File::create(&path)
-            .await
+        let file = File::create(&path).map_err(|error| file_system_error(&path, &error))?;
+        // Reserve the full size up front so parts can be written in any order.
+        file.set_len(size_bytes)
             .map_err(|error| file_system_error(&path, &error))?;
 
         Ok(Self {
-            writer: BufWriter::with_capacity(WRITE_BUFFER_BYTES, file),
             path,
+            file: Arc::new(file),
             is_finished: false,
         })
     }
 
-    async fn write(&mut self, bytes: &[u8]) -> Result<(), AppError> {
-        self.writer
-            .write_all(bytes)
+    /// Writes `batch` at `offset` on a blocking thread, empties it, and returns the next offset.
+    async fn write_batch(&self, offset: u64, batch: &mut Vec<u8>) -> Result<u64, AppError> {
+        if batch.is_empty() {
+            return Ok(offset);
+        }
+        let data = std::mem::replace(batch, Vec::with_capacity(WRITE_BATCH_BYTES));
+        let next_offset = offset + data.len() as u64;
+        let file = Arc::clone(&self.file);
+        let write_result = tokio::task::spawn_blocking(move || file.write_all_at(&data, offset))
             .await
-            .map_err(|error| file_system_error(&self.path, &error))
+            .map_err(|join_error| {
+                AppError::Download(format!("Disk write stopped: {join_error}"))
+            })?;
+        write_result.map_err(|error| file_system_error(&self.path, &error))?;
+        Ok(next_offset)
     }
 
-    async fn finish(mut self, destination: &Path) -> Result<(), AppError> {
-        self.writer
-            .flush()
-            .await
-            .map_err(|error| file_system_error(&self.path, &error))?;
+    fn finish(mut self, destination: &Path) -> Result<(), AppError> {
         fs::rename(&self.path, destination)
-            .await
             .map_err(|error| file_system_error(destination, &error))?;
         self.is_finished = true;
         Ok(())
@@ -173,7 +347,7 @@ impl Drop for PartialFile {
         }
         // Runs on cancel or error. Nothing useful to do if removal fails; the next
         // download of the same file overwrites the leftover `.part` anyway.
-        let _ = std::fs::remove_file(&self.path);
+        let _ = fs::remove_file(&self.path);
     }
 }
 
@@ -190,9 +364,44 @@ fn file_system_error(path: &Path, error: &std::io::Error) -> AppError {
     }
 }
 
-fn to_download_error(error: SdkError<GetObjectError>, request: &DownloadRequest) -> AppError {
+fn http_status<E>(error: &SdkError<E, HttpResponse>) -> Option<u16> {
+    error
+        .raw_response()
+        .map(|response| response.status().as_u16())
+}
+
+fn to_head_error(
+    error: SdkError<HeadObjectError, HttpResponse>,
+    request: &DownloadRequest,
+) -> AppError {
+    if let Some(HeadObjectError::NotFound(_)) = error.as_service_error() {
+        return AppError::ObjectNotFound {
+            key: request.key.clone(),
+        };
+    }
+    // HEAD responses have no body, so access errors only show as the HTTP status.
+    if http_status(&error) == Some(HTTP_FORBIDDEN) {
+        return AppError::AccessDenied {
+            profile: request.profile.clone(),
+            bucket: request.bucket.clone(),
+        };
+    }
+    AppError::Download(DisplayErrorContext(&error).to_string())
+}
+
+fn to_download_error(
+    error: SdkError<GetObjectError, HttpResponse>,
+    request: &DownloadRequest,
+) -> AppError {
     if let Some(GetObjectError::NoSuchKey(_)) = error.as_service_error() {
         return AppError::ObjectNotFound {
+            key: request.key.clone(),
+        };
+    }
+    if error.code() == Some("PreconditionFailed")
+        || http_status(&error) == Some(HTTP_PRECONDITION_FAILED)
+    {
+        return AppError::ObjectChanged {
             key: request.key.clone(),
         };
     }
@@ -233,6 +442,61 @@ mod tests {
     }
 
     #[test]
+    fn part_ranges_cover_every_byte_exactly_once() {
+        let ranges = part_ranges(25, 10);
+        assert_eq!(
+            ranges,
+            vec![
+                ByteRange {
+                    start: 0,
+                    end_inclusive: 9
+                },
+                ByteRange {
+                    start: 10,
+                    end_inclusive: 19
+                },
+                ByteRange {
+                    start: 20,
+                    end_inclusive: 24
+                },
+            ]
+        );
+        assert_eq!(ranges.iter().map(|range| range.len()).sum::<u64>(), 25);
+        assert_eq!(ranges[0].header_value(), "bytes=0-9");
+    }
+
+    #[test]
+    fn part_ranges_handle_exact_multiples_and_empty_files() {
+        assert_eq!(part_ranges(20, 10).len(), 2);
+        assert_eq!(
+            part_ranges(1, 10),
+            vec![ByteRange {
+                start: 0,
+                end_inclusive: 0
+            }]
+        );
+        assert!(part_ranges(0, 10).is_empty());
+    }
+
+    #[test]
+    fn a_one_gigabyte_dump_is_split_into_128_parts() {
+        assert_eq!(part_ranges(1024 * 1024 * 1024, PART_SIZE_BYTES).len(), 128);
+    }
+
+    #[test]
+    fn only_network_errors_are_retried() {
+        assert!(is_retryable(&AppError::Download(
+            "connection reset".to_string()
+        )));
+        assert!(!is_retryable(&AppError::ObjectChanged {
+            key: "k".to_string()
+        }));
+        assert!(!is_retryable(&AppError::ObjectNotFound {
+            key: "k".to_string()
+        }));
+    }
+
+    #[test]
     fn partial_path_appends_suffix() {
         let destination = Path::new("/tmp/gen_2026.dump");
         assert_eq!(
@@ -242,10 +506,29 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn partial_file_is_deleted_when_dropped_unfinished() {
+    async fn parts_written_out_of_order_produce_the_right_file() {
+        let destination = std::env::temp_dir().join("db-refresh-parts-test.dump");
+        let partial_file = PartialFile::create(&destination, 10).unwrap();
+
+        // Later part first, as happens when parallel parts finish in any order.
+        partial_file
+            .write_batch(5, &mut b"world".to_vec())
+            .await
+            .unwrap();
+        partial_file
+            .write_batch(0, &mut b"hello".to_vec())
+            .await
+            .unwrap();
+        partial_file.finish(&destination).unwrap();
+
+        assert_eq!(fs::read(&destination).unwrap(), b"helloworld");
+        fs::remove_file(&destination).unwrap();
+    }
+
+    #[test]
+    fn partial_file_is_deleted_when_dropped_unfinished() {
         let destination = std::env::temp_dir().join("db-refresh-drop-test.dump");
-        let mut partial_file = PartialFile::create(&destination).await.unwrap();
-        partial_file.write(b"half a dump").await.unwrap();
+        let partial_file = PartialFile::create(&destination, 1024).unwrap();
         let partial_path = partial_file.path.clone();
         assert!(partial_path.exists());
 
@@ -253,19 +536,5 @@ mod tests {
 
         assert!(!partial_path.exists());
         assert!(!destination.exists());
-    }
-
-    #[tokio::test]
-    async fn finished_partial_file_becomes_destination() {
-        let destination = std::env::temp_dir().join("db-refresh-finish-test.dump");
-        let mut partial_file = PartialFile::create(&destination).await.unwrap();
-        partial_file.write(b"full dump").await.unwrap();
-        let partial_path = partial_file.path.clone();
-
-        partial_file.finish(&destination).await.unwrap();
-
-        assert!(!partial_path.exists());
-        assert_eq!(std::fs::read(&destination).unwrap(), b"full dump");
-        std::fs::remove_file(&destination).unwrap();
     }
 }

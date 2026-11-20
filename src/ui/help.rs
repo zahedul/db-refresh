@@ -31,7 +31,7 @@ mod tests {
     #[test]
     fn guide_renders_headings_and_tables() {
         let rendered = markdown_to_html(USER_GUIDE_MARKDOWN);
-        assert!(rendered.contains("<h1>DB Refresh — User Guide</h1>"));
+        assert!(rendered.contains("<h1>DB Refresh - User Guide</h1>"));
         assert!(rendered.contains("<h2>4. Refresh a database in one click</h2>"));
         assert!(rendered.contains("<table>"));
     }

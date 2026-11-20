@@ -6,12 +6,12 @@ use rfd::AsyncFileDialog;
 
 use crate::aws::download::DownloadProgress;
 use crate::clipboard::copy_to_clipboard;
-use crate::database::credentials::password_for;
+use crate::database::credentials::unlock_password;
 use crate::database::log_line::{LogLevel, LogLine};
 use crate::database::restore::{RestorePhase, RestoreRequest};
 use crate::database::target::DatabaseTarget;
 use crate::format::{
-    format_duration, format_relative_age, format_size, format_speed, now_epoch_secs,
+    format_count, format_duration, format_relative_age, format_size, format_speed, now_epoch_secs,
 };
 use crate::local_files::{LocalDump, display_local_path, download_dir, list_local_dumps};
 use crate::ui::app_context::{AppContext, use_app_context};
@@ -22,6 +22,7 @@ use crate::ui::picker::{
     PickerFooter, PickerList, PickerMessage, PickerPopover, PickerRow, PickerTrigger,
 };
 use crate::ui::state::{RestoreJob, RestoreResult, RestoreState};
+use crate::ui::sync::data_loss_warning;
 use crate::ui::sync::restore_runner::{cancel_restore, start_restore};
 
 // The DOM only shows the tail of the log; the full (bounded) log stays in memory.
@@ -93,7 +94,7 @@ pub fn SyncPanel() -> Element {
                 }
             }
             RestoreStatus {}
-            RestoreLog {}
+            RestoreLogView {}
         }
         if let (true, Some(dump), Some(target)) = (is_confirming(), selected_dump, selected_target) {
             ConfirmRestoreDialog { dump, target, on_close: move |_| is_confirming.set(false) }
@@ -257,30 +258,38 @@ fn ConfirmRestoreDialog(
     let app = use_app_context();
     let mut typed_password = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
+    let mut is_unlocking = use_signal(|| false);
 
     let confirm = {
         let (dump, target) = (dump.clone(), target.clone());
         move |_| {
-            let password = match password_for(&target, &typed_password()) {
-                Ok(password) => password,
-                Err(password_error) => {
-                    error.set(Some(password_error.to_string()));
-                    return;
-                }
-            };
-            let request = RestoreRequest {
-                dump_path: dump.path.clone(),
-                target: target.clone(),
-                password,
-            };
-            let job = RestoreJob {
-                dump_name: dump.file_name.clone(),
-                target_name: target.name.clone(),
-                database: target.database.clone(),
-                includes_download: false,
-            };
-            start_restore(app, request, job);
-            on_close.call(());
+            let (dump, target) = (dump.clone(), target.clone());
+            is_unlocking.set(true);
+            spawn(async move {
+                let unlocked = unlock_password(&target, &typed_password()).await;
+                is_unlocking.set(false);
+                let password = match unlocked {
+                    Ok(password) => password,
+                    Err(password_error) => {
+                        error.set(Some(password_error.to_string()));
+                        return;
+                    }
+                };
+                let request = RestoreRequest {
+                    dump_path: dump.path.clone(),
+                    target: target.clone(),
+                    password,
+                };
+                let job = RestoreJob {
+                    dump_name: dump.file_name.clone(),
+                    target_name: target.name.clone(),
+                    database: target.database.clone(),
+                    includes_download: false,
+                    recreates_database: target.recreate_database,
+                };
+                start_restore(app, request, job);
+                on_close.call(());
+            });
         }
     };
 
@@ -293,10 +302,7 @@ fn ConfirmRestoreDialog(
                 strong { "{target.database}" }
                 " on {target.host}:{target.port}."
             }
-            div { class: "warning-box",
-                "Existing tables in {target.database} are dropped and recreated (pg_restore --clean). "
-                "Any changes you made in that database will be lost."
-            }
+            div { class: "warning-box", "{data_loss_warning(&target)}" }
             if !target.is_password_saved {
                 div { class: "form-field",
                     span { class: "field-label", "Password for {target.user}" }
@@ -314,7 +320,12 @@ fn ConfirmRestoreDialog(
             div { class: "modal-footer",
                 div { class: "modal-footer-spacer" }
                 button { class: "secondary", onclick: move |_| on_close.call(()), "Cancel" }
-                button { class: "danger", onclick: confirm, "Replace data" }
+                button {
+                    class: "danger",
+                    disabled: is_unlocking(),
+                    onclick: confirm,
+                    if is_unlocking() { "Waiting for Touch ID…" } else { "Replace data" }
+                }
             }
         }
     }
@@ -353,7 +364,7 @@ fn RestoreStatus() -> Element {
                 PhaseSteps {
                     current: *phase,
                     outcome: StepsOutcome::InProgress,
-                    includes_download: job.includes_download,
+                    job: job.clone(),
                 }
                 div { class: "restore-status running",
                     span { class: "spinner" }
@@ -413,7 +424,7 @@ fn RestoreStatus() -> Element {
                 PhaseSteps {
                     current: *reached_phase,
                     outcome: steps_outcome,
-                    includes_download: job.includes_download,
+                    job: job.clone(),
                 }
                 div { class: "restore-status {status_class}", "{message}" }
             }
@@ -430,10 +441,11 @@ enum StepsOutcome {
 
 /// `Check dump ✓ ─ Connect ✓ ─ Restore data ● ─ Done`
 #[component]
-fn PhaseSteps(current: RestorePhase, outcome: StepsOutcome, includes_download: bool) -> Element {
-    let phases = RestorePhase::ALL
+fn PhaseSteps(current: RestorePhase, outcome: StepsOutcome, job: RestoreJob) -> Element {
+    let phases: Vec<RestorePhase> = RestorePhase::ALL
         .into_iter()
-        .filter(move |phase| includes_download || *phase != RestorePhase::Downloading);
+        .filter(|phase| job.includes_phase(*phase))
+        .collect();
     let step_class = |phase: RestorePhase| match (phase.cmp(&current), outcome) {
         (Ordering::Less, _) | (Ordering::Equal, StepsOutcome::Done) => "done",
         (Ordering::Equal, StepsOutcome::InProgress) => "active",
@@ -480,20 +492,21 @@ impl LogFilter {
 }
 
 #[component]
-fn RestoreLog() -> Element {
+fn RestoreLogView() -> Element {
     let app = use_app_context();
     let mut filter = use_signal(|| LogFilter::All);
     let mut is_copied = use_signal(|| false);
 
-    let lines = app.restore_log.read();
+    let log = app.restore_log.read();
+    let lines = log.lines();
     if lines.is_empty() {
         return rsx! {
             div { class: "log-view empty", "The restore log appears here when a sync runs." }
         };
     }
 
-    let count_of = |level: LogLevel| lines.iter().filter(|line| line.level == level).count();
-    let (error_count, warning_count) = (count_of(LogLevel::Error), count_of(LogLevel::Warning));
+    let (error_count, warning_count) = (log.count(LogLevel::Error), log.count(LogLevel::Warning));
+    let (received_count, trimmed_count) = (log.received_line_count(), log.trimmed_line_count());
     let active_filter = filter();
     let matching_lines: Vec<&LogLine> = lines
         .iter()
@@ -505,6 +518,7 @@ fn RestoreLog() -> Element {
         let full_log = app
             .restore_log
             .peek()
+            .lines()
             .iter()
             .map(|line| line.text.as_str())
             .collect::<Vec<_>>()
@@ -517,9 +531,9 @@ fn RestoreLog() -> Element {
         div { class: "log-toolbar",
             span { class: "log-title", "Log" }
             div { class: "chips",
-                LogFilterChip { label: format!("All {}", lines.len()), filter_value: LogFilter::All, filter }
-                LogFilterChip { label: format!("Errors {error_count}"), filter_value: LogFilter::Errors, filter, tone: "error" }
-                LogFilterChip { label: format!("Warnings {warning_count}"), filter_value: LogFilter::Warnings, filter, tone: "warning" }
+                LogFilterChip { label: format!("All {}", format_count(received_count)), filter_value: LogFilter::All, filter }
+                LogFilterChip { label: format!("Errors {}", format_count(error_count)), filter_value: LogFilter::Errors, filter, tone: "error" }
+                LogFilterChip { label: format!("Warnings {}", format_count(warning_count)), filter_value: LogFilter::Warnings, filter, tone: "warning" }
             }
             div { class: "modal-footer-spacer" }
             button { class: "link-button", onclick: copy_log,
@@ -541,9 +555,16 @@ fn RestoreLog() -> Element {
                 }
             }
         }
+        if active_filter == LogFilter::All && trimmed_count > 0 {
+            p { class: "muted log-filter-note",
+                "Showing the latest {format_count(lines.len())} of {format_count(received_count)} lines. "
+                "Older routine lines were trimmed; errors and warnings are always kept. "
+                "Copy log copies the kept lines."
+            }
+        }
         if active_filter != LogFilter::All {
             p { class: "muted log-filter-note",
-                "Showing {matching_lines.len()} of {lines.len()} lines. "
+                "Showing {format_count(matching_lines.len())} of {format_count(received_count)} lines. "
                 button { class: "link-button", onclick: move |_| filter.set(LogFilter::All), "Show all" }
             }
         }

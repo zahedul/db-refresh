@@ -22,6 +22,11 @@ pub struct DatabaseTarget {
     /// Dumps named `<dump_group>_…` suggest this target, e.g. `gen`.
     pub dump_group: String,
     pub is_password_saved: bool,
+    /// Ask for Touch ID (or the Mac password) before the saved password is used.
+    pub require_touch_id: bool,
+    /// Drop and create the database before each restore, so it becomes an exact copy
+    /// of the dump (objects that exist only locally are removed too).
+    pub recreate_database: bool,
     /// Where "Refresh latest" looks for this database's newest dump.
     pub dump_source: DumpSource,
 }
@@ -58,15 +63,21 @@ impl Default for DatabaseTarget {
             database: String::new(),
             dump_group: String::new(),
             is_password_saved: false,
+            // Also the value for targets saved before this option existed (serde default).
+            require_touch_id: true,
+            recreate_database: false,
             dump_source: DumpSource::default(),
         }
     }
 }
 
 impl DatabaseTarget {
+    /// New targets start from an empty database by default: it is the only way to get
+    /// an exact copy. Targets saved before this option existed keep the old behaviour.
     pub fn new_draft() -> Self {
         Self {
             id: new_target_id(),
+            recreate_database: true,
             ..Self::default()
         }
     }

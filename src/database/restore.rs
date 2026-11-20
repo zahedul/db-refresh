@@ -50,14 +50,17 @@ pub enum RestorePhase {
     Downloading,
     CheckingDump,
     Connecting,
+    /// Only with "Start from an empty database": drop and create the database.
+    RecreatingDatabase,
     RestoringData,
 }
 
 impl RestorePhase {
-    pub const ALL: [Self; 4] = [
+    pub const ALL: [Self; 5] = [
         Self::Downloading,
         Self::CheckingDump,
         Self::Connecting,
+        Self::RecreatingDatabase,
         Self::RestoringData,
     ];
 
@@ -66,6 +69,7 @@ impl RestorePhase {
             Self::Downloading => "Download",
             Self::CheckingDump => "Check dump",
             Self::Connecting => "Connect",
+            Self::RecreatingDatabase => "Recreate database",
             Self::RestoringData => "Restore data",
         }
     }
@@ -73,6 +77,7 @@ impl RestorePhase {
 
 // Marker lines printed by `scripts/restore-postgres.sh`; keep in sync with the script.
 const CONNECTING_MARKER: &str = "Testing connection";
+const RECREATING_MARKER: &str = "Recreating database";
 const RESTORING_MARKER: &str = "Starting database restoration";
 const IGNORED_ERRORS_MARKER: &str = "errors ignored on restore:";
 
@@ -80,6 +85,9 @@ const IGNORED_ERRORS_MARKER: &str = "errors ignored on restore:";
 pub fn phase_started_by(line: &str) -> Option<RestorePhase> {
     if line.starts_with(CONNECTING_MARKER) {
         return Some(RestorePhase::Connecting);
+    }
+    if line.starts_with(RECREATING_MARKER) {
+        return Some(RestorePhase::RecreatingDatabase);
     }
     if line.starts_with(RESTORING_MARKER) {
         return Some(RestorePhase::RestoringData);
@@ -110,6 +118,7 @@ pub async fn run_restore(
         .arg(&request.dump_path)
         .arg(&request.target.database)
         .env("RESTORE_JOBS", RESTORE_JOBS)
+        .env("RECREATE_DATABASE", recreate_flag(&request.target))
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -156,6 +165,10 @@ pub async fn run_restore(
         Some(exit_code) => RestoreExit::Failed { exit_code },
         None => RestoreExit::Stopped,
     })
+}
+
+fn recreate_flag(target: &DatabaseTarget) -> &'static str {
+    if target.recreate_database { "1" } else { "0" }
 }
 
 /// Sends SIGTERM to the whole restore process group (bash, psql/pg_restore and its workers).
@@ -248,6 +261,11 @@ mod tests {
         // The markers must exist in the embedded script, or phases would never advance.
         assert!(RESTORE_SCRIPT.contains(CONNECTING_MARKER));
         assert!(RESTORE_SCRIPT.contains(RESTORING_MARKER));
+        assert!(RESTORE_SCRIPT.contains(RECREATING_MARKER));
+        assert_eq!(
+            phase_started_by("Recreating database app_db..."),
+            Some(RestorePhase::RecreatingDatabase)
+        );
     }
 
     #[test]
@@ -265,6 +283,51 @@ mod tests {
     #[test]
     fn path_puts_homebrew_postgres_tools_first() {
         assert!(path_with_postgres_tools().starts_with("/opt/homebrew/opt/libpq/bin:"));
+    }
+
+    /// Runs only on request, against a throwaway server, because it drops a database:
+    /// `DB_REFRESH_TEST_PGPORT=55432 DB_REFRESH_TEST_PGPASSWORD=… DB_REFRESH_TEST_DUMP=/path/x.dump
+    ///  cargo test recreate_mode -- --ignored`
+    #[tokio::test]
+    #[ignore = "needs a disposable PostgreSQL server; see the doc comment"]
+    async fn recreate_mode_restores_into_an_empty_database() {
+        let env = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
+        let request = RestoreRequest {
+            dump_path: PathBuf::from(env("DB_REFRESH_TEST_DUMP")),
+            target: DatabaseTarget {
+                host: "127.0.0.1".to_string(),
+                port: env("DB_REFRESH_TEST_PGPORT").parse().unwrap(),
+                user: "postgres".to_string(),
+                database: "db_refresh_integration".to_string(),
+                recreate_database: true,
+                ..DatabaseTarget::default()
+            },
+            password: Some(env("DB_REFRESH_TEST_PGPASSWORD")),
+        };
+        let mut phases = Vec::new();
+        let mut lines = Vec::new();
+
+        let exit = run_restore(
+            &request,
+            |_| {},
+            |line| {
+                phases.extend(phase_started_by(&line));
+                lines.push(line);
+            },
+        )
+        .await
+        .unwrap();
+
+        assert_eq!(exit, RestoreExit::Succeeded, "log:\n{}", lines.join("\n"));
+        assert_eq!(
+            phases,
+            vec![
+                RestorePhase::Connecting,
+                RestorePhase::RecreatingDatabase,
+                RestorePhase::RestoringData
+            ]
+        );
+        assert!(!lines.iter().any(|line| line.contains("error")));
     }
 
     #[tokio::test]

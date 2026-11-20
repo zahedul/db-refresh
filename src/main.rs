@@ -13,6 +13,7 @@ use dioxus::desktop::{Config, LogicalSize, WindowBuilder};
 use dioxus::prelude::*;
 
 use aws::profiles::choose_profile;
+use database::log_line::RestoreLog;
 use settings::{load_settings, save_settings};
 use ui::{
     AppContext, AppView, ConnectPanel, HelpView, JobsPanel, RestoreState, ResultsPanel,
@@ -26,6 +27,9 @@ const WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(1200.0, 800.0);
 const MIN_WINDOW_SIZE: LogicalSize<f64> = LogicalSize::new(960.0, 640.0);
 
 fn main() {
+    // Warnings and errors only: at INFO the AWS SDK logs credential details such as
+    // the access key id. `init` fails only if a logger already exists, which is fine.
+    let _ = dioxus::logger::init(dioxus::logger::tracing::Level::WARN);
     legacy_migration::migrate_legacy_folders();
 
     let window = WindowBuilder::new()
@@ -53,7 +57,7 @@ fn App() -> Element {
         selected_dump: Signal::new(None),
         selected_target_id: Signal::new(None),
         restore: Signal::new(RestoreState::Idle),
-        restore_log: Signal::new(Vec::new()),
+        restore_log: Signal::new(RestoreLog::default()),
     });
 
     let profiles = use_signal(load_profiles);

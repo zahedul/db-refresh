@@ -29,6 +29,11 @@ pub enum AppError {
     #[error("\"{key}\" no longer exists in the bucket. Search again.")]
     ObjectNotFound { key: String },
 
+    #[error(
+        "\"{key}\" was replaced in S3 while downloading. Download it again to get the new version."
+    )]
+    ObjectChanged { key: String },
+
     #[error("Download stopped early: got {received_bytes} of {expected_bytes} bytes. Try again.")]
     IncompleteDownload {
         received_bytes: u64,
@@ -52,6 +57,12 @@ pub enum AppError {
 
     #[error("Keychain: {0}")]
     Keychain(String),
+
+    #[error("Touch ID was cancelled, so the saved password was not used.")]
+    AuthenticationCancelled,
+
+    #[error("Touch ID: {0}")]
+    Authentication(String),
 
     #[error("Could not connect: {0}")]
     DatabaseConnection(String),

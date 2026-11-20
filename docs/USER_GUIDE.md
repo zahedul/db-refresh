@@ -1,6 +1,6 @@
-# DB Refresh — User Guide
+# DB Refresh - User Guide
 
-DB Refresh keeps a local PostgreSQL database up to date with your backups. It finds database dumps in an S3 bucket, downloads them to your Mac, and restores them into a local database — for any project, as often as you like.
+DB Refresh keeps a local PostgreSQL database up to date with your backups. It finds database dumps in an S3 bucket, downloads them to your Mac, and restores them into a local database - for any project, as often as you like.
 
 **Typical day:** open the app → **⇄ Sync database** → click **Refresh latest** on your database → confirm. That's it.
 
@@ -36,11 +36,13 @@ The app has three tabs at the top: **↓ Download**, **⇄ Sync database** and *
 
 1. Go to **⇄ Sync database** and click **Add database**.
 2. Fill in the dialog:
-   - **Quick fill** — paste a connection URL such as `postgres://app_user:secret@localhost:5432/app_db` and the fields below fill in for you. (The URL box clears itself because it contains your password.)
-   - **Connection** — Host, Port, Database and User. The line under the fields shows where data will go, e.g. `app_user@localhost:5432/app_db`.
-   - **Authentication** — your database password. Turn on **Remember password in macOS Keychain** so you never type it again. Leave the password empty if it's in your `~/.pgpass` file.
-   - **Display** — an optional **Name** (defaults to the database name) and a **Dump prefix** (see below).
-   - **One-click refresh** — where this database's newest dump lives. Click **Use current S3 source** to copy what's selected on the Download tab, or fill in **AWS profile**, **Bucket**, **Folder** and optionally **Name contains**.
+   - **Quick fill** - paste a connection URL such as `postgres://app_user:secret@localhost:5432/app_db` and the fields below fill in for you. (The URL box clears itself because it contains your password.)
+   - **Connection** - Host, Port, Database and User. The line under the fields shows where data will go, e.g. `app_user@localhost:5432/app_db`.
+   - **Authentication** - your database password. Turn on **Remember password in macOS Keychain** so you never type it again. Leave the password empty if it's in your `~/.pgpass` file.
+     With a remembered password, **Ask for Touch ID before using it** (on by default) asks for your fingerprint each time the password is used - or your Mac password if Touch ID isn't available.
+   - **Display** - an optional **Name** (defaults to the database name) and a **Dump prefix** (see below).
+   - **Restore** - **Start from an empty database** (on by default for new databases): the database is deleted and created again before each restore, so it becomes an *exact* copy of the dump. Your database user must own the database and be allowed to create databases.
+   - **One-click refresh** - where this database's newest dump lives. Click **Use current S3 source** to copy what's selected on the Download tab, or fill in **AWS profile**, **Bucket**, **Folder** and optionally **Name contains**.
 3. Click **Test connection**. You should see *✓ Connected in … ms*.
 4. Click **Add database**.
 
@@ -94,8 +96,8 @@ Your bucket, folder and profile are remembered for next time.
 
 Click **↓ Download** on a dump. A dialog opens:
 
-- **Save as** — change the file name if you like. `.dump` is added if you leave it out.
-- **Quick names** — one click adds a database's prefix, e.g. `2026-11-20.dump` → `gen_2026-11-20.dump`, so the Sync tab recognises it.
+- **Save as** - change the file name if you like. `.dump` is added if you leave it out.
+- **Quick names** - one click adds a database's prefix, e.g. `2026-11-20.dump` → `gen_2026-11-20.dump`, so the Sync tab recognises it.
 - A warning appears if a file with that name already exists.
 
 Click **Download**. The **Downloads** panel at the bottom shows progress, speed and time left. You can **Cancel**, **Retry**, **Show in Finder**, or go straight to restoring with **⇄ Sync to database…**.
@@ -108,22 +110,22 @@ Files are saved in `~/Downloads/db-refresh-dumps/`.
 
 Use this when you want an older dump, or one from somewhere else on your Mac.
 
-1. Under **1 · Dump file**, choose a downloaded dump — or **Choose another file…** for any `.dump` file on your Mac.
+1. Under **1 · Dump file**, choose a downloaded dump - or **Choose another file…** for any `.dump` file on your Mac.
 2. Under **2 · Database**, choose where it goes (picked automatically if the file has a matching prefix).
 3. Click **Sync now**, read the warning, and click **Replace data**.
 
 Shortcut: **⇄ Sync…** on a downloaded dump in the Backups list opens this screen with the file already selected.
 
-> **Important:** restoring **replaces** the database. Existing tables are dropped and recreated (`pg_restore --clean`). Anything you changed in that database is lost.
+> **Important:** restoring **replaces** the database. With **Start from an empty database** the whole database is deleted and created again; otherwise existing tables are dropped and recreated (`pg_restore --clean`). Either way, anything you changed in that database is lost.
 
 ### Reading the result
 
 | Message | What it means |
 |---|---|
 | ✓ *database is now a copy of …* | Everything was restored. |
-| ⚠ *restored, but N item(s) failed and were skipped* | The data is in, but some items failed — often harmless (e.g. extensions or roles that don't exist locally). Click **Errors** in the log to see them. |
+| ⚠ *restored, but N item(s) failed and were skipped* | The data is in, but some items failed - often harmless (e.g. extensions or roles that don't exist locally). Click **Errors** in the log to see them. |
 | ✗ *Sync failed* | The restore stopped. Click **Errors** in the log for the reason. |
-| *Cancelled* | You pressed Cancel. The database may be half-restored — run the sync again. |
+| *Cancelled* | You pressed Cancel. The database may be half-restored - run the sync again. |
 
 ### The log
 
@@ -153,17 +155,32 @@ Your AWS login is missing or expired. For SSO, run `aws sso login --profile <nam
 **"Access denied" / "Bucket … does not exist" / "different region"**
 Check the bucket name, and that your profile has access to it. For region errors, set the right `region` for that profile in `~/.aws/config`.
 
+**"… was replaced in S3 while downloading"**
+A new backup was uploaded under the same name during your download, so the app stopped rather than mix two versions. Download it again.
+
+**Downloads are slow**
+DB Refresh fetches 8 parts of a dump at once. If it's still slow, the limit is usually your network or VPN - try without the VPN if your setup allows it.
+
 **"psql is not installed"**
 Run `brew install libpq` in Terminal.
 
 **"Could not connect: … password authentication failed"**
 Edit the database (✎ on its card), type the password again, keep **Remember password in macOS Keychain** on, and **Save changes**.
 
-**macOS asks to allow Keychain access**
-Click **Always Allow**. It may ask again after installing a new version of the app.
+**macOS asks for your Mac password to allow Keychain access**
+Click **Always Allow**. Builds signed with the app's signing certificate keep that permission across updates, so this should be a one-time question. (The Touch ID prompt is different: it appears on purpose when **Ask for Touch ID before using it** is on.)
+
+**"Touch ID was cancelled, so the saved password was not used"**
+You dismissed the fingerprint prompt. Sync again and confirm with Touch ID, or type the password in the dialog instead.
 
 **"DB Refresh can't be opened" / "is damaged"**
 See *Install* above: **Open Anyway** in Privacy & Security, or the `xattr` command.
+
+**"cannot drop schema … because other objects depend on it" and "schema … already exists"**
+Your local database contains objects that are not in the dump (for example tables from local work), so those schemas could not be replaced. The data from the dump is restored, but the leftovers remain. Edit the database, turn on **Start from an empty database**, and sync again for an exact copy.
+
+**"… may not create databases, so … was left untouched"**
+**Start from an empty database** needs permission to create databases. Ask your database admin to run `ALTER ROLE <your user> CREATEDB;` - or turn the option off. Nothing was deleted.
 
 **The restore finished "with N errors"**
 Click **Errors** in the log. Messages about extensions, owners or roles are usually safe to ignore. If tables you need are missing, share the copied log with your team.

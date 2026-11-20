@@ -55,6 +55,21 @@ pub struct RestoreJob {
     pub database: String,
     /// "Refresh latest" downloads first; a manual sync starts at the restore script.
     pub includes_download: bool,
+    /// The database is dropped and created before restoring.
+    pub recreates_database: bool,
+}
+
+impl RestoreJob {
+    /// Download and Recreate database are optional stages; the rest always run.
+    pub fn includes_phase(&self, phase: RestorePhase) -> bool {
+        match phase {
+            RestorePhase::Downloading => self.includes_download,
+            RestorePhase::RecreatingDatabase => self.recreates_database,
+            RestorePhase::CheckingDump | RestorePhase::Connecting | RestorePhase::RestoringData => {
+                true
+            }
+        }
+    }
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -94,5 +109,34 @@ pub enum RestoreState {
 impl RestoreState {
     pub fn is_running(&self) -> bool {
         matches!(self, Self::Running { .. })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn job(includes_download: bool, recreates_database: bool) -> RestoreJob {
+        RestoreJob {
+            dump_name: "gen.dump".to_string(),
+            target_name: "General".to_string(),
+            database: "gen_db".to_string(),
+            includes_download,
+            recreates_database,
+        }
+    }
+
+    #[test]
+    fn optional_phases_follow_the_job() {
+        let shown = |job: &RestoreJob| {
+            RestorePhase::ALL
+                .into_iter()
+                .filter(|phase| job.includes_phase(*phase))
+                .count()
+        };
+        assert_eq!(shown(&job(false, false)), 3);
+        assert_eq!(shown(&job(true, false)), 4);
+        assert_eq!(shown(&job(true, true)), 5);
+        assert!(!job(true, false).includes_phase(RestorePhase::RecreatingDatabase));
     }
 }

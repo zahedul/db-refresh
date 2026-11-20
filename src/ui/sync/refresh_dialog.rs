@@ -1,7 +1,7 @@
 use dioxus::prelude::*;
 
 use crate::aws::s3::{DumpFile, SearchRequest, search_dump_files};
-use crate::database::credentials::password_for;
+use crate::database::credentials::unlock_password;
 use crate::database::target::{DatabaseTarget, DumpSource};
 use crate::dump_name::with_group_prefix;
 use crate::error::AppError;
@@ -10,6 +10,7 @@ use crate::local_files::{has_complete_local_copy, local_path_for};
 use crate::ui::app_context::use_app_context;
 use crate::ui::icons::RefreshIcon;
 use crate::ui::modal::Modal;
+use crate::ui::sync::data_loss_warning;
 use crate::ui::sync::restore_runner::{RefreshPlan, start_refresh};
 
 /// Finds the newest dump in the target's source and asks before replacing the data.
@@ -18,6 +19,7 @@ pub fn RefreshLatestDialog(target: DatabaseTarget, on_close: EventHandler<()>) -
     let app = use_app_context();
     let mut typed_password = use_signal(String::new);
     let mut error = use_signal(|| None::<String>);
+    let mut is_unlocking = use_signal(|| false);
 
     let source = target.dump_source.clone();
     let latest_dump = use_resource(move || {
@@ -48,25 +50,31 @@ pub fn RefreshLatestDialog(target: DatabaseTarget, on_close: EventHandler<()>) -
             let Some((latest_dump, local_file_name, is_on_disk)) = plan_parts.clone() else {
                 return;
             };
-            let password = match password_for(&target, &typed_password()) {
-                Ok(password) => password,
-                Err(password_error) => {
-                    error.set(Some(password_error.to_string()));
-                    return;
-                }
-            };
-            start_refresh(
-                app,
-                RefreshPlan {
-                    target: target.clone(),
-                    source: target.dump_source.clone(),
-                    latest_dump,
-                    local_file_name,
-                    needs_download: !is_on_disk,
-                    password,
-                },
-            );
-            on_close.call(());
+            let target = target.clone();
+            is_unlocking.set(true);
+            spawn(async move {
+                let unlocked = unlock_password(&target, &typed_password()).await;
+                is_unlocking.set(false);
+                let password = match unlocked {
+                    Ok(password) => password,
+                    Err(password_error) => {
+                        error.set(Some(password_error.to_string()));
+                        return;
+                    }
+                };
+                start_refresh(
+                    app,
+                    RefreshPlan {
+                        source: target.dump_source.clone(),
+                        target,
+                        latest_dump,
+                        local_file_name,
+                        needs_download: !is_on_disk,
+                        password,
+                    },
+                );
+                on_close.call(());
+            });
         }
     };
 
@@ -103,10 +111,7 @@ pub fn RefreshLatestDialog(target: DatabaseTarget, on_close: EventHandler<()>) -
                     is_on_disk: *is_on_disk,
                     target: target.clone(),
                 }
-                div { class: "warning-box",
-                    "Existing tables in {target.database} are dropped and recreated (pg_restore --clean). "
-                    "Any changes you made in that database will be lost."
-                }
+                div { class: "warning-box", "{data_loss_warning(&target)}" }
                 if !target.is_password_saved {
                     div { class: "form-field",
                         span { class: "field-label", "Password for {target.user}" }
@@ -128,10 +133,10 @@ pub fn RefreshLatestDialog(target: DatabaseTarget, on_close: EventHandler<()>) -
                 button { class: "secondary", onclick: move |_| on_close.call(()), "Cancel" }
                 button {
                     class: "danger with-icon",
-                    disabled: plan_parts.is_none(),
+                    disabled: plan_parts.is_none() || is_unlocking(),
                     onclick: confirm,
                     RefreshIcon {}
-                    "Refresh now"
+                    if is_unlocking() { "Waiting for Touch ID…" } else { "Refresh now" }
                 }
             }
         }

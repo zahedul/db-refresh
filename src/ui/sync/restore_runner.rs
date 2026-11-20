@@ -9,7 +9,7 @@ use dioxus::prelude::*;
 
 use crate::aws::download::{DownloadProgress, DownloadRequest, download_dump_file};
 use crate::aws::s3::DumpFile;
-use crate::database::log_line::{LogLevel, LogLine};
+use crate::database::log_line::{LogLevel, LogLine, RestoreLog};
 use crate::database::restore::{
     RestoreExit, RestorePhase, RestoreRequest, ignored_error_count, phase_started_by, run_restore,
     stop_restore,
@@ -62,6 +62,7 @@ pub fn start_refresh(app: AppContext, plan: RefreshPlan) {
         target_name: plan.target.name.clone(),
         database: plan.target.database.clone(),
         includes_download: true,
+        recreates_database: plan.target.recreate_database,
     };
     let first_phase = if plan.needs_download {
         RestorePhase::Downloading
@@ -229,7 +230,10 @@ fn begin_job(
     first_log_line: String,
 ) -> Instant {
     let (mut restore, mut restore_log) = (app.restore, app.restore_log);
-    restore_log.set(vec![LogLine::note(LogLevel::Info, first_log_line)]);
+    restore_log.set(RestoreLog::starting_with(LogLine::note(
+        LogLevel::Info,
+        first_log_line,
+    )));
     let started_at = Instant::now();
     restore.set(RestoreState::Running {
         job: job.clone(),
@@ -318,18 +322,8 @@ fn restore_result(
     }
 }
 
-fn append_log_line(mut restore_log: Signal<Vec<LogLine>>, line: LogLine) {
-    let mut lines = restore_log.write();
-    lines.push(line);
-    trim_log(&mut lines, MAX_LOG_LINES);
-}
-
-/// Drops the oldest info lines first, so errors and warnings are never lost from the log.
-fn trim_log(lines: &mut Vec<LogLine>, max_lines: usize) {
-    while lines.len() > max_lines {
-        let oldest_info = lines.iter().position(|line| line.level == LogLevel::Info);
-        lines.remove(oldest_info.unwrap_or(0));
-    }
+fn append_log_line(mut restore_log: Signal<RestoreLog>, line: LogLine) {
+    restore_log.write().push(line, MAX_LOG_LINES);
 }
 
 fn summary_log_line(result: &RestoreResult, job: &RestoreJob, elapsed: Duration) -> LogLine {
@@ -384,20 +378,5 @@ mod tests {
             restore_result(Ok(RestoreExit::Stopped), None),
             RestoreResult::Cancelled
         );
-    }
-
-    #[test]
-    fn trim_log_keeps_errors_and_warnings() {
-        let mut lines = vec![
-            LogLine::note(LogLevel::Error, "first error"),
-            LogLine::note(LogLevel::Info, "old info"),
-            LogLine::note(LogLevel::Warning, "warning"),
-            LogLine::note(LogLevel::Info, "new info"),
-        ];
-
-        trim_log(&mut lines, 3);
-
-        let texts: Vec<&str> = lines.iter().map(|line| line.text.as_str()).collect();
-        assert_eq!(texts, vec!["first error", "warning", "new info"]);
     }
 }

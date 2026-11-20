@@ -28,6 +28,8 @@ VERSION="$(grep -m1 '^version' Cargo.toml | cut -d '"' -f2)"
 ARCH="$(uname -m)"
 DMG_PATH="${OUT_DIR}/DB-Refresh-${VERSION}-${ARCH}.dmg"
 SIGNING_IDENTITY="${SIGNING_IDENTITY:-}"
+# Created by scripts/create-signing-certificate.sh; used when no Developer ID is set.
+LOCAL_IDENTITY="DB Refresh Local Signing"
 NOTARY_PROFILE="${NOTARY_PROFILE:-}"
 
 # dx is installed by `cargo install dioxus-cli`; ~/.cargo/bin may not be on PATH.
@@ -55,13 +57,20 @@ rm -rf "$BUNDLE_DIR"
 APP_PATH="${BUNDLE_DIR}/${APP_NAME}.app"
 [[ -d "$APP_PATH" ]] || fail "Bundle not found at ${APP_PATH}"
 
+SIGNING_MODE="ad-hoc"
 if [[ -n "$SIGNING_IDENTITY" ]]; then
+    SIGNING_MODE="developer-id"
     step "Signing with ${SIGNING_IDENTITY} (hardened runtime)"
     codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_PATH"
+elif security find-identity -v -p codesigning | grep -q "\"$LOCAL_IDENTITY\""; then
+    # A stable identity keeps Keychain "Always Allow" working across builds.
+    SIGNING_MODE="local"
+    step "Signing with ${LOCAL_IDENTITY}"
+    codesign --force --options runtime --sign "$LOCAL_IDENTITY" "$APP_PATH"
 else
     # The compiler only signs the executable; sign the whole bundle so macOS doesn't
     # report the downloaded app as "damaged".
-    step "Signing ad-hoc (no Developer ID set)"
+    step "Signing ad-hoc (no Developer ID or local certificate; see create-signing-certificate.sh)"
     codesign --force --sign - "$APP_PATH"
 fi
 codesign --verify --strict --verbose=1 "$APP_PATH"
@@ -107,6 +116,8 @@ if [[ -n "$NOTARY_PROFILE" ]]; then
     echo " Signing  : Developer ID, notarized (opens without warnings)"
 elif [[ -n "$SIGNING_IDENTITY" ]]; then
     echo " Signing  : Developer ID, not notarized (users see one warning)"
+elif [[ "$SIGNING_MODE" == "local" ]]; then
+    echo " Signing  : local certificate (Keychain access survives updates; other Macs: Open Anyway once)"
 else
     echo " Signing  : ad-hoc (users allow it once: System Settings → Privacy & Security → Open Anyway)"
 fi

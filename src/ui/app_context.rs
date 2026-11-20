@@ -2,7 +2,7 @@ use std::path::PathBuf;
 
 use dioxus::prelude::*;
 
-use crate::database::log_line::LogLine;
+use crate::database::log_line::RestoreLog;
 use crate::database::target::suggest_target;
 use crate::settings::Settings;
 use crate::ui::state::RestoreState;
@@ -24,7 +24,7 @@ pub struct AppContext {
     pub selected_dump: Signal<Option<PathBuf>>,
     pub selected_target_id: Signal<Option<String>>,
     pub restore: Signal<RestoreState>,
-    pub restore_log: Signal<Vec<LogLine>>,
+    pub restore_log: Signal<RestoreLog>,
 }
 
 impl AppContext {
