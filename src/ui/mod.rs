@@ -14,6 +14,7 @@ mod picker;
 mod plain_text_input;
 mod profile_picker;
 mod results;
+mod s3_location;
 mod state;
 mod sync;
 mod tags;

@@ -1905,3 +1905,250 @@ button.with-icon {
 .modal .download-folder {
   margin-top: 6px;
 }
+
+/* ---------- Rich subtitle: count + S3 location trail ---------- */
+
+.panel-subtitle.rich {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.summary-count {
+  color: var(--text);
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.summary-joiner {
+  color: var(--muted);
+  font-size: 12px;
+}
+
+.s3-trail {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.s3-step {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+}
+
+.s3-segment {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  min-width: 0;
+  padding: 2px 9px 2px 7px;
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.s3-segment svg {
+  flex-shrink: 0;
+  width: 13px;
+  height: 13px;
+}
+
+.s3-segment.bucket {
+  color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 11%, transparent);
+}
+
+.s3-segment.folder {
+  color: var(--teal-dark);
+  background: color-mix(in srgb, var(--teal) 14%, transparent);
+}
+
+.s3-segment.folder .picker-icon {
+  color: inherit;
+}
+
+.s3-separator {
+  color: var(--muted);
+  font-size: 13px;
+}
+
+@media (prefers-color-scheme: dark) {
+  .s3-segment.folder {
+    color: var(--aqua);
+  }
+}
+
+.add-button.full-width {
+  justify-content: center;
+  width: 100%;
+  margin-bottom: 12px;
+  padding: 8px 12px;
+}
+
+/* ---------- Database card layout ---------- */
+
+.target-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 0;
+  padding: 0;
+}
+
+.target-body {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 12px 12px 10px;
+}
+
+.target-main {
+  gap: 2px;
+}
+
+.target-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  font-size: 14px;
+}
+
+.target-title-row {
+  margin-bottom: 4px;
+  min-width: 0;
+}
+
+.target-database {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.target-connection {
+  color: var(--muted);
+  font-size: 11.5px;
+}
+
+.target-badges {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-top: 8px;
+}
+
+.target-badge {
+  padding: 2px 8px;
+  color: var(--muted);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 11px;
+  white-space: nowrap;
+}
+
+.target-footer {
+  display: flex;
+  align-items: center;
+  padding: 8px 12px 10px 54px;
+  border-top: 1px solid var(--border);
+}
+
+.target-footer .refresh-latest-button,
+.target-footer .setup-refresh {
+  margin-top: 0;
+}
+
+.target-card.selected .target-footer {
+  border-top-color: color-mix(in srgb, var(--accent) 30%, var(--border));
+}
+
+/* ---------- Download folder (compact control) ---------- */
+
+.download-folder {
+  gap: 8px;
+}
+
+.download-folder-label {
+  color: var(--muted);
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.folder-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  max-width: 220px;
+  padding: 4px 10px 4px 8px;
+  color: var(--text);
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 999px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.folder-chip:hover {
+  border-color: var(--accent);
+}
+
+.folder-chip .picker-icon {
+  color: var(--teal);
+}
+
+.folder-chip-name {
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.folder-chip-chevron {
+  color: var(--muted);
+  font-size: 10px;
+}
+
+.folder-reset {
+  padding: 2px 6px;
+  font-size: 14px;
+}
+
+/* ---------- Search location hint ---------- */
+
+.search-hint.location {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  overflow: visible;
+  white-space: normal;
+}
+
+.s3-trail.wrap {
+  flex-wrap: wrap;
+  justify-content: center;
+  row-gap: 4px;
+  overflow: visible;
+}
+
+.s3-trail.wrap .s3-segment {
+  font-size: 11px;
+}
+
+/* The empty Downloads strip is a flex row: let its header fill it so the
+   "Save to" control sits at the right edge. */
+.jobs-panel.empty .panel-header {
+  flex: 1;
+  min-width: 0;
+}
+
+.jobs-panel .panel-header-actions {
+  margin-left: auto;
+}

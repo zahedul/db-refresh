@@ -27,8 +27,10 @@ pub fn TargetsPanel() -> Element {
                 icon: rsx! { ServerIcon {} },
                 title: "Databases",
                 subtitle: "Where dumps get restored",
+            }
+            if !targets.is_empty() {
                 button {
-                    class: "add-button",
+                    class: "add-button full-width",
                     title: "Add a database to restore into",
                     onclick: move |_| start_new_target(),
                     PlusIcon {}
@@ -90,59 +92,89 @@ fn TargetCard(
             class: "target-card",
             class: if is_selected { "selected" },
             onclick: move |_| selected_target_id.set(Some(target_id.clone())),
-            div { class: "target-icon", ServerIcon {} }
-            div { class: "target-main",
-                div { class: "target-title-row",
-                    span { class: "target-name", "{target.name}" }
-                    if !target.dump_group.is_empty() {
-                        GroupTag { group: target.dump_group.clone() }
+            div { class: "target-body",
+                div { class: "target-icon", ServerIcon {} }
+                div { class: "target-main",
+                    div { class: "target-title-row",
+                        span { class: "target-name", title: "{target.name}", "{target.name}" }
+                        if !target.dump_group.is_empty() {
+                            GroupTag { group: target.dump_group.clone() }
+                        }
                     }
-                }
-                span { class: "target-database mono", "{target.database}" }
-                span { class: "target-connection", title: "{target.connection_label()}",
-                    "{target.user} · {target.host}:{target.port}"
-                }
-                if target.is_password_saved {
-                    span { class: "target-keychain",
-                        if target.should_require_touch_id { "🔑 Password in Keychain · Touch ID" } else { "🔑 Password in Keychain" }
+                    span { class: "target-database mono", "{target.database}" }
+                    span { class: "target-connection mono", title: "{target.connection_label()}",
+                        "{target.user}@{target.host}:{target.port}"
                     }
+                    TargetBadges { target: target.clone() }
                 }
-                span { class: "target-keychain", title: "{target.restore_mode.description()}",
-                    "🧹 {target.restore_mode.label()}"
-                }
-                if target.dump_source.is_configured() {
-                    button {
-                        class: "refresh-latest-button",
-                        title: "Download the newest dump from {target.dump_source.s3_location()} and restore it",
-                        disabled: is_restore_running,
-                        onclick: move |event| {
-                            event.stop_propagation();
-                            on_refresh.call(());
-                        },
-                        RefreshIcon {}
-                        "Refresh latest"
-                    }
-                } else {
-                    button {
-                        class: "link-button setup-refresh",
-                        onclick: move |event| {
-                            event.stop_propagation();
-                            on_edit.call(());
-                        },
-                        "Set up one-click refresh →"
-                    }
+                button {
+                    class: "icon-button edit-button",
+                    title: "Edit {target.name}",
+                    onclick: move |event| {
+                        // Editing must not also select the card underneath.
+                        event.stop_propagation();
+                        on_edit.call(());
+                    },
+                    PencilIcon {}
                 }
             }
+            div { class: "target-footer",
+                TargetRefreshAction { target: target.clone(), is_restore_running, on_edit, on_refresh }
+            }
+        }
+    }
+}
+
+/// The database's settings as small pills: password storage, Touch ID, restore mode.
+#[component]
+fn TargetBadges(target: DatabaseTarget) -> Element {
+    rsx! {
+        div { class: "target-badges",
+            if target.is_password_saved {
+                span { class: "target-badge", title: "The password is saved in the macOS Keychain", "🔑 Keychain" }
+                if target.should_require_touch_id {
+                    span { class: "target-badge", title: "Touch ID is asked before the saved password is used", "👆 Touch ID" }
+                }
+            }
+            span { class: "target-badge", title: "{target.restore_mode.description()}",
+                "🧹 {target.restore_mode.short_label()}"
+            }
+        }
+    }
+}
+
+/// "Refresh latest" when a dump source is set, otherwise a link to set one up.
+#[component]
+fn TargetRefreshAction(
+    target: DatabaseTarget,
+    is_restore_running: bool,
+    on_edit: EventHandler<()>,
+    on_refresh: EventHandler<()>,
+) -> Element {
+    if !target.dump_source.is_configured() {
+        return rsx! {
             button {
-                class: "icon-button edit-button",
-                title: "Edit {target.name}",
+                class: "link-button setup-refresh",
                 onclick: move |event| {
-                    // Editing must not also select the card underneath.
                     event.stop_propagation();
                     on_edit.call(());
                 },
-                PencilIcon {}
+                "Set up one-click refresh →"
             }
+        };
+    }
+
+    rsx! {
+        button {
+            class: "refresh-latest-button",
+            title: "Download the newest dump from {target.dump_source.s3_location()} and restore it",
+            disabled: is_restore_running,
+            onclick: move |event| {
+                event.stop_propagation();
+                on_refresh.call(());
+            },
+            RefreshIcon {}
+            "Refresh latest"
         }
     }
 }

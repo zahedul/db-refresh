@@ -9,6 +9,7 @@ use crate::ui::icons::{CloudIcon, SearchIcon};
 use crate::ui::panel_header::PanelHeader;
 use crate::ui::plain_text_input::PlainTextInput;
 use crate::ui::profile_picker::{ProfileList, ProfilePicker};
+use crate::ui::s3_location::S3LocationTrail;
 use crate::ui::state::SearchState;
 
 #[component]
@@ -95,7 +96,8 @@ pub fn ConnectPanel(
             SearchButton {
                 is_searching: search_state.read().is_searching(),
                 missing_input: find_missing_search_input(selected_profile.read().is_some(), &bucket()),
-                location: format_search_location(&bucket(), &prefix()),
+                bucket: bucket().trim().to_string(),
+                prefix: prefix(),
                 on_search: move |_| start_search(),
             }
         }
@@ -136,7 +138,8 @@ fn start_dump_search(mut search_state: Signal<SearchState>, request: SearchReque
         return;
     }
     search_state.set(SearchState::Searching {
-        s3_location: request.s3_location(),
+        bucket: request.bucket.trim().to_string(),
+        prefix: request.prefix.clone(),
     });
     spawn(async move {
         let next_state = match search_dump_files(request).await {
@@ -152,7 +155,8 @@ fn SearchButton(
     is_searching: bool,
     /// Why searching is not possible yet, if it isn't.
     missing_input: Option<String>,
-    location: String,
+    bucket: String,
+    prefix: String,
     on_search: EventHandler<()>,
 ) -> Element {
     let is_disabled = is_searching || missing_input.is_some();
@@ -174,7 +178,10 @@ fn SearchButton(
             match missing_input {
                 Some(reason) => rsx! { span { class: "search-hint", "{reason}" } },
                 None => rsx! {
-                    span { class: "search-hint mono", title: "{location}", "in {location}" }
+                    div { class: "search-hint location",
+                        span { "Searches" }
+                        S3LocationTrail { bucket, prefix, is_wrapping: true }
+                    }
                 },
             }
         }
@@ -189,10 +196,6 @@ fn find_missing_search_input(has_profile: bool, bucket: &str) -> Option<String> 
         return Some("Enter a bucket to search.".to_string());
     }
     None
-}
-
-fn format_search_location(bucket: &str, prefix: &str) -> String {
-    format!("s3://{}/{prefix}", bucket.trim())
 }
 
 #[cfg(test)]
@@ -210,13 +213,5 @@ mod tests {
             Some("Enter a bucket to search.")
         );
         assert_eq!(find_missing_search_input(true, "bucket"), None);
-    }
-
-    #[test]
-    fn search_location_shows_bucket_and_folder() {
-        assert_eq!(
-            format_search_location(" prod-db-backup ", "backups/"),
-            "s3://prod-db-backup/backups/"
-        );
     }
 }

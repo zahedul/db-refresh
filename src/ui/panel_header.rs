@@ -7,6 +7,9 @@ pub fn PanelHeader(
     icon: Element,
     title: String,
     #[props(default)] subtitle: Option<String>,
+    /// Formatted subtitle; shown instead of `subtitle` when given.
+    #[props(default)]
+    subtitle_content: Option<Element>,
     #[props(default)] is_compact: bool,
     children: Element,
 ) -> Element {
@@ -17,7 +20,9 @@ pub fn PanelHeader(
             div { class: "panel-header-icon", {icon} }
             div { class: "panel-header-text",
                 h2 { "{title}" }
-                if let Some(subtitle) = subtitle {
+                if let Some(content) = subtitle_content {
+                    div { class: "panel-subtitle rich", {content} }
+                } else if let Some(subtitle) = subtitle {
                     p { class: "panel-subtitle", title: "{subtitle}", "{subtitle}" }
                 }
             }

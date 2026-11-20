@@ -11,7 +11,7 @@ use crate::error::AppError;
 #[derive(Clone, Debug, PartialEq)]
 pub enum SearchState {
     Idle,
-    Searching { s3_location: String },
+    Searching { bucket: String, prefix: String },
     Found(SearchResult),
     Failed(AppError),
 }

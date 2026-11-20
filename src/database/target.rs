@@ -68,6 +68,15 @@ impl RestoreMode {
         }
     }
 
+    /// Two-word form for small badges.
+    pub fn short_label(self) -> &'static str {
+        match self {
+            Self::ReplaceObjects => "Replace objects",
+            Self::DropSchemas => "Drop schemas",
+            Self::RecreateDatabase => "Recreate DB",
+        }
+    }
+
     pub fn description(self) -> &'static str {
         match self {
             Self::DropSchemas => {

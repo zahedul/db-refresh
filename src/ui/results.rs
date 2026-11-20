@@ -6,7 +6,7 @@ use dioxus::prelude::*;
 use crate::aws::s3::{DumpFile, SearchResult, find_latest_file_per_group};
 use crate::constants::DUMP_FILES_PER_PAGE;
 use crate::format::{
-    format_relative_age, format_size, format_utc_timestamp, read_current_epoch_secs,
+    format_count, format_relative_age, format_size, format_utc_timestamp, read_current_epoch_secs,
 };
 use crate::local_files::{has_complete_local_copy, reveal_in_finder};
 use crate::ui::app_context::use_app_context;
@@ -14,6 +14,7 @@ use crate::ui::download_dialog::DownloadDialog;
 use crate::ui::downloads::DownloadJobs;
 use crate::ui::icons::DatabaseIcon;
 use crate::ui::panel_header::PanelHeader;
+use crate::ui::s3_location::S3LocationTrail;
 use crate::ui::state::SearchState;
 use crate::ui::state::{DownloadJob, DownloadStatus};
 use crate::ui::tags::GroupTag;
@@ -25,6 +26,21 @@ pub fn ResultsPanel(
     downloads: DownloadJobs,
 ) -> Element {
     let subtitle = build_backups_subtitle(&search_state.read());
+    let subtitle_content = match &*search_state.read() {
+        SearchState::Searching { bucket, prefix } => Some(rsx! {
+            span { class: "spinner small" }
+            span { class: "summary-joiner", "Searching" }
+            S3LocationTrail { bucket: bucket.clone(), prefix: prefix.clone() }
+        }),
+        SearchState::Found(result) => Some(rsx! {
+            BackupsSummary {
+                dump_count: result.dump_files.len(),
+                bucket: result.request.bucket.clone(),
+                prefix: result.request.prefix.clone(),
+            }
+        }),
+        _ => None,
+    };
     let content = match &*search_state.read() {
         SearchState::Idle => {
             let hint = match selected_profile.read().as_deref() {
@@ -63,6 +79,7 @@ pub fn ResultsPanel(
                 icon: rsx! { DatabaseIcon {} },
                 title: "Backups",
                 subtitle,
+                subtitle_content,
             }
             {content}
         }
@@ -72,13 +89,25 @@ pub fn ResultsPanel(
 fn build_backups_subtitle(search_state: &SearchState) -> String {
     match search_state {
         SearchState::Idle => "Dump files found in S3 appear here".to_string(),
-        SearchState::Searching { s3_location } => format!("Searching {s3_location}"),
+        SearchState::Searching { bucket, prefix } => format!("Searching s3://{bucket}/{prefix}"),
         SearchState::Failed(_) => "Search failed".to_string(),
         SearchState::Found(result) => {
             let count = result.dump_files.len();
             let noun = if count == 1 { "dump" } else { "dumps" };
             format!("{count} {noun} in {}", result.request.s3_location())
         }
+    }
+}
+
+/// `23 dumps in (☁ bucket) › (📁 folder)`
+#[component]
+fn BackupsSummary(dump_count: usize, bucket: String, prefix: String) -> Element {
+    let noun = if dump_count == 1 { "dump" } else { "dumps" };
+
+    rsx! {
+        span { class: "summary-count", "{format_count(dump_count)} {noun}" }
+        span { class: "summary-joiner", "in" }
+        S3LocationTrail { bucket, prefix }
     }
 }
 
