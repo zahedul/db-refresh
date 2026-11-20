@@ -1829,3 +1829,79 @@ button.with-icon {
   background: var(--bg);
   font-weight: 600;
 }
+
+/* ---------- Restore mode choice ---------- */
+
+.mode-choice {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.mode-option {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 10px 12px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  cursor: pointer;
+  transition: border-color 0.15s, background 0.15s;
+}
+
+.mode-option:hover {
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--border));
+}
+
+.mode-option.selected {
+  border-color: var(--accent);
+  background: color-mix(in srgb, var(--accent) 7%, transparent);
+}
+
+.mode-option input {
+  display: inline;
+  width: auto;
+  margin: 3px 0 0;
+  accent-color: var(--accent);
+}
+
+.mode-option-text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.mode-option-label {
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* ---------- Download folder ---------- */
+
+.download-folder {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  font-size: 12px;
+}
+
+.download-folder .picker-icon {
+  color: var(--teal);
+}
+
+.download-folder-path {
+  overflow: hidden;
+  color: var(--muted);
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+.download-folder .link-button {
+  flex-shrink: 0;
+  padding: 2px 4px;
+}
+
+.modal .download-folder {
+  margin-top: 6px;
+}

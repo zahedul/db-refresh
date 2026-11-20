@@ -64,12 +64,16 @@ End-user documentation lives in [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) and i
 - **Touch ID** — before a saved password is used (restore, refresh, test connection), the app asks for your fingerprint via LocalAuthentication, falling back to the Mac password. On by default; a typed password never needs it.
 - **Test connection** — runs `SELECT 1` with `psql` and reports the round-trip time.
 - **One-click source** — each database can store where its newest dump lives (profile, bucket, folder, name filter).
-- **Start from an empty database** — optional per database (default for new ones): terminates other sessions, `DROP DATABASE` + `CREATE DATABASE`, then restores — an exact copy without `--clean` noise. Checks `CREATEDB` first, so a database is never dropped without being re-created.
+- **Restore modes** (per database, under *Before restoring*):
+  - **Drop the dump's schemas** (default) — reads the schemas from the dump's table of contents and runs `DROP SCHEMA … CASCADE` for each in **one transaction** (all or nothing), then restores. Exact copy of those schemas, other schemas kept, no `CREATEDB` needed.
+  - **Recreate the database** — terminates other sessions, `DROP DATABASE` + `CREATE DATABASE`, then restores. Checks `CREATEDB` first, so a database is never dropped without being re-created.
+  - **Replace objects** — plain `pg_restore --clean`; kept for users who can do neither. (With local leftovers it can fail on dependencies and leave old and new rows mixed — the reason it is no longer the default.)
+  - Settings saved with the former on/off switch migrate automatically.
 
 ### Restore ("sync")
 - **Pick any dump** — downloaded dumps, or any `.dump` file via the native file picker; the matching database is selected automatically from the file-name prefix.
 - **Explicit confirmation** — the destructive `pg_restore --clean` is explained before anything runs.
-- **Stage indicator** — *Check dump → Connect → Restore data → Done*, plus *Download* (one-click refresh) and *Recreate database* (empty-database mode), driven by marker lines from the restore script.
+- **Stage indicator** — *Check dump → Connect → Restore data → Done*, plus *Download* (one-click refresh) and *Drop schemas* or *Recreate database* (depending on the restore mode), driven by marker lines from the restore script.
 - **Honest results** — distinguishes *success*, *completed with N skipped items* (`pg_restore` exit 1 with "errors ignored on restore"), *failed* and *cancelled*.
 - **Live log** — colour-coded (errors, warnings, success), filter chips (*All / Errors / Warnings*), *Copy log*, capped at 5,000 lines while always keeping errors and warnings.
 - **Real cancel** — the restore runs in its own process group, so Cancel also stops `pg_restore`'s parallel workers.
@@ -94,7 +98,7 @@ End-user documentation lives in [`docs/USER_GUIDE.md`](docs/USER_GUIDE.md) and i
                  │ aws::download      HEAD + 8× ranged GET (If-Match ETag) ◀─┼─── (ListObjectsV2,
                  │        │                                                  │     HeadObject, GetObject)
                  │        ▼                                                  │
-                 │  ~/Downloads/db-refresh-dumps/<name>.dump(.part)          │
+                 │  <download folder>/<name>.dump(.part)   (default ~/Downloads) │
                  │        │                                                  │
                  │ database::restore  bash -c <embedded restore script> ─────┼──▶ pg_restore / psql
   Keychain ─────▶│ database::credentials  PGPASSWORD (child env only)        │       │
@@ -110,7 +114,7 @@ pg_restore -w -h $HOST -p $PORT -U $USER -d $DATABASE -j 4 \
   --verbose --no-owner --no-acl --clean --if-exists <dump>
 ```
 
-With **Start from an empty database** (`RECREATE_DATABASE=1`), the script instead connects to the `postgres` maintenance database, verifies the user has `CREATEDB` (so a database is never dropped without being re-created), terminates other sessions, runs `DROP DATABASE` and `CREATE DATABASE` (names quoted via psql variables), and restores without `--clean`.
+The app passes the database's mode as `RESTORE_MODE` (`clean`, `drop-schemas` or `recreate`). In **drop-schemas** mode, the script lists the dump's schemas with `pg_restore -l`, then inside one transaction generates `format('DROP SCHEMA IF EXISTS %I CASCADE', …)` statements and runs them with `\gexec`; if any fails, the transaction rolls back and nothing is dropped. The restore then keeps `--clean --if-exists` for objects outside those schemas (e.g. extensions). In **recreate** mode the script instead connects to the `postgres` maintenance database, verifies the user has `CREATEDB` (so a database is never dropped without being re-created), terminates other sessions, runs `DROP DATABASE` and `CREATE DATABASE` (names quoted via psql variables), and restores without `--clean`.
 
 `stderr` is merged into `stdout` (`exec 2>&1`) so the log keeps the real order; output is read line by line with lossy UTF-8 decoding so an odd byte can't abort a restore.
 
@@ -159,7 +163,6 @@ The crate is one binary split into **domain modules** (no UI code, unit-tested) 
 | `dump_name` | Dump groups (`gen_…` → `gen`), prefixing, download-name validation. |
 | `local_files` | Download folder, local dump listing, "already on disk" check, reveal in Finder. |
 | `settings` | JSON settings with atomic writes (temp file + rename) and `#[serde(default)]` for forward compatibility. |
-| `legacy_migration` | One-time move of data saved under the app's former name. |
 | `format`, `clipboard`, `error` | Human-readable sizes/durations/ages, `pbcopy`, the `AppError` enum. |
 
 ### UI modules
@@ -191,7 +194,7 @@ The crate is one binary split into **domain modules** (no UI code, unit-tested) 
 |---|---|---|
 | Settings (profile, bucket, folder, database targets, download index) | `~/Library/Application Support/db-refresh/settings.json` | No secrets. Written atomically. |
 | Database passwords | macOS Keychain, service `dev.dbrefresh.app`, account = target id | Optional; encrypted by macOS. |
-| Downloaded dumps | `~/Downloads/db-refresh-dumps/` | Partial downloads end in `.part`. |
+| Downloaded dumps | `~/Downloads` by default; any folder via **Change…** (saved as `custom_download_folder`) | Partial downloads end in `.part`. |
 | AWS credentials | Your existing `~/.aws` files / SSO cache | Read via the AWS credential chain; never copied. |
 
 - Passwords are passed to `psql`/`pg_restore` only through the **child process environment**, never on a command line (visible in `ps`).
@@ -226,8 +229,12 @@ cargo fmt                        # format
 ```
 
 Conventions used throughout the code:
-- No `unwrap`/`expect` in application code; errors are `AppError` values.
-- Early returns over nesting; self-explanatory names; comments explain *why*, not *what*.
+- **Names:** functions start with a verb (`build_breadcrumbs`, `resolve_password`); booleans start with `is_`, `has_`, `can_` or `should_`; constants are `UPPER_SNAKE_CASE`. Simple getters on structs follow the Rust API guidelines and stay nouns (`dump.file_name()`, `settings.download_folder()`), like the standard library's `len()`.
+- **Constants:** all of them live in `src/constants.rs` (tests keep their own fixtures).
+- **Errors:** no `unwrap`/`expect` in application code; failures are `AppError` values with a message that says what to do.
+- **Shape:** early returns over nesting; one responsibility per function; long components are split into smaller components, hooks and plain functions.
+- **Comments** explain *why*, never *what*.
+- **Tests:** unit tests sit at the bottom of the file they test; integration tests go in `tests/` and use only the public API.
 - Domain logic stays out of components so it can be unit-tested.
 - `docs/USER_GUIDE.md` uses the exact UI labels — update it when the UI changes.
 
@@ -256,14 +263,16 @@ The script builds with the optimised release profile (thin LTO, single codegen u
 
 ## Testing
 
-`cargo test` runs **82 unit tests** (plus 1 opt-in integration test) covering the logic that is easy to get subtly wrong:
+Tests follow the Rust convention: **unit tests** live next to the code in `#[cfg(test)] mod tests` (so they can test private helpers), and **integration tests** live in `tests/` and use only the public library API.
+
+`cargo test` runs **84 unit tests** and the integration tests in `tests/restore.rs`, covering the logic that is easy to get subtly wrong:
 
 - AWS profile parsing (named profiles, SSO sessions, malformed headers).
 - Search helpers: name filters, newest-first sorting, latest-per-group, folder placeholders.
 - Download maths: byte ranges cover every byte exactly once, out-of-order part writes, partial-file cleanup, retry policy.
 - Restore: embedded script arguments and markers, phase detection, ignored-error parsing, result classification (`exit 1` + ignored errors = partial success), log trimming that keeps errors.
 - A real run of the embedded script against a missing dump (verifies the bash wiring end to end).
-- An opt-in integration test (`cargo test recreate_mode -- --ignored`, needs a disposable PostgreSQL) that restores in empty-database mode and checks the stage sequence.
+- `tests/restore.rs`: runs the real restore script (always), plus PostgreSQL tests for drop-schemas and recreate mode that run on request against a throwaway server — see the instructions at the top of that file (`cargo test --test restore -- --ignored`).
 - Connection-URL parsing (escaping, IPv6, rejection), target validation and suggestion, settings round-trip and defaults, data migration, file-name rules, formatting, and the user guide rendering without web links.
 
 Network, Keychain and database operations are verified manually in the app (they need real AWS access and a PostgreSQL server).
@@ -284,28 +293,34 @@ Network, Keychain and database operations are verified manually in the app (they
 │   ├── build-release.sh         Signed .app + .dmg + checksum
 │   └── create-signing-certificate.sh   One-time local code-signing certificate
 └── src/
-    ├── main.rs                  Window, App root, tabs
+    ├── main.rs                  Thin entry point: calls db_refresh::run()
+    ├── lib.rs                   The library: module list and run() (window setup)
+    ├── constants.rs             Every constant of the app, grouped by area
     ├── aws/                     profiles, s3, s3_path, download
     ├── database/                target, credentials, connection_url, restore, log_line
     ├── ui/                      components (sync/ holds the Sync tab)
     ├── settings.rs, local_files.rs, dump_name.rs, format.rs
-    └── error.rs, clipboard.rs, legacy_migration.rs
+    └── error.rs, clipboard.rs
+tests/
+└── restore.rs                   Integration tests (public API only)
 ```
 
 ---
 
 ## Tunable constants
 
-| Constant | Value | Where |
+All constants live in `src/constants.rs`; the most useful ones to tune:
+
+| Setting | Constant | Value |
 |---|---|---|
-| Download part size / parallel parts | 8 MiB / 8 | `aws/download.rs` |
-| Attempts per part | 3 (500 ms × attempt back-off) | `aws/download.rs` |
-| Progress update interval | 200 ms | `aws/download.rs` |
-| Max objects scanned per search | 50,000 | `aws/s3.rs` |
-| Results per page | 10 | `ui/results.rs` |
-| `pg_restore` parallel jobs | 4 | `database/restore.rs` |
-| Log lines kept / shown | 5,000 / 1,000 | `ui/sync/restore_runner.rs`, `ui/sync/sync_panel.rs` |
-| Window size / minimum | 1200×800 / 960×640 | `main.rs` |
+| Download part size / parallel parts | `DOWNLOAD_PART_SIZE_BYTES` / `MAX_PARALLEL_DOWNLOAD_PARTS` | 8 MiB / 8 |
+| Attempts per part | `MAX_PART_ATTEMPTS`, `PART_RETRY_BASE_DELAY` | 3, 500 ms × attempt |
+| Progress update interval | `DOWNLOAD_PROGRESS_INTERVAL` | 200 ms |
+| Max objects scanned per search | `MAX_SCANNED_OBJECTS` | 50,000 |
+| Results per page | `DUMP_FILES_PER_PAGE` | 10 |
+| `pg_restore` parallel jobs | `RESTORE_PARALLEL_JOBS` | 4 |
+| Log lines kept / shown | `MAX_KEPT_LOG_LINES` / `MAX_VISIBLE_LOG_LINES` | 5,000 / 1,000 |
+| Window size / minimum | `WINDOW_SIZE` / `MIN_WINDOW_SIZE` | 1200×800 / 960×640 |
 
 ---
 

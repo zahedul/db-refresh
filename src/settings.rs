@@ -8,10 +8,9 @@ use std::{env, fs, io};
 use dioxus::logger::tracing;
 use serde::{Deserialize, Serialize};
 
+use crate::constants::{APP_FOLDER_NAME, SETTINGS_FILE_NAME};
 use crate::database::target::DatabaseTarget;
-
-const APP_FOLDER_NAME: &str = "db-refresh";
-const SETTINGS_FILE_NAME: &str = "settings.json";
+use crate::local_files::resolve_default_download_folder;
 
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 // Missing fields fall back to defaults, so adding a setting later does not break old files.
@@ -23,9 +22,21 @@ pub struct Settings {
     pub database_targets: Vec<DatabaseTarget>,
     /// S3 key -> local file name, for dumps saved under a different name than in S3.
     pub downloaded_files: BTreeMap<String, String>,
+    /// Where dumps are saved; `None` means the default, `~/Downloads`.
+    pub custom_download_folder: Option<PathBuf>,
 }
 
 impl Settings {
+    pub fn download_folder(&self) -> PathBuf {
+        self.custom_download_folder
+            .clone()
+            .unwrap_or_else(resolve_default_download_folder)
+    }
+
+    pub fn download_path_for(&self, file_name: &str) -> PathBuf {
+        self.download_folder().join(file_name)
+    }
+
     /// The local file name a dump was (or will be) saved under.
     pub fn local_file_name(&self, s3_key: &str, s3_file_name: &str) -> String {
         self.downloaded_files
@@ -64,22 +75,15 @@ pub fn save_settings(settings: &Settings) {
     }
 }
 
-/// `~/Library/Application Support/<app folder>`
-pub fn app_data_dir(app_folder_name: &str) -> Option<PathBuf> {
+/// `~/Library/Application Support/db-refresh/settings.json`
+fn settings_path() -> Option<PathBuf> {
     let home = env::home_dir()?;
     Some(
         home.join("Library")
             .join("Application Support")
-            .join(app_folder_name),
+            .join(APP_FOLDER_NAME)
+            .join(SETTINGS_FILE_NAME),
     )
-}
-
-pub fn settings_dir() -> Option<PathBuf> {
-    app_data_dir(APP_FOLDER_NAME)
-}
-
-fn settings_path() -> Option<PathBuf> {
-    Some(settings_dir()?.join(SETTINGS_FILE_NAME))
 }
 
 fn read_settings(path: &Path) -> io::Result<Settings> {
@@ -128,6 +132,7 @@ mod tests {
                 "backups/2026-11-20.dump".to_string(),
                 "gen_2026-11-20.dump".to_string(),
             )]),
+            custom_download_folder: Some(PathBuf::from("/Volumes/Backups/dumps")),
         };
 
         write_settings(&path, &settings).unwrap();
@@ -152,6 +157,21 @@ mod tests {
         assert_eq!(
             settings.local_file_name("backups/other.dump", "other.dump"),
             "other.dump"
+        );
+    }
+
+    #[test]
+    fn download_folder_defaults_to_downloads_and_can_be_changed() {
+        let mut settings = Settings::default();
+        assert_eq!(
+            settings.download_folder(),
+            resolve_default_download_folder()
+        );
+
+        settings.custom_download_folder = Some(PathBuf::from("/Volumes/Backups/dumps"));
+        assert_eq!(
+            settings.download_path_for("app.dump"),
+            PathBuf::from("/Volumes/Backups/dumps/app.dump")
         );
     }
 

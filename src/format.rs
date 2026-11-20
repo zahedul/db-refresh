@@ -1,10 +1,10 @@
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+use crate::constants::{
+    RELATIVE_AGE_MAX_DAYS, SECONDS_PER_DAY, SECONDS_PER_HOUR, SECONDS_PER_MINUTE, SIZE_STEP,
+    SIZE_UNITS,
+};
 use aws_sdk_s3::primitives::{DateTime, DateTimeFormat};
-
-const SIZE_UNITS: [&str; 5] = ["B", "KB", "MB", "GB", "TB"];
-// Decimal units (1 KB = 1000 B) to match what macOS Finder shows.
-const SIZE_STEP: f64 = 1000.0;
 
 pub fn format_size(size_bytes: u64) -> String {
     let mut value = size_bytes as f64;
@@ -56,11 +56,6 @@ pub fn format_duration(duration: Duration) -> String {
     format!("{seconds}s")
 }
 
-const SECONDS_PER_MINUTE: i64 = 60;
-const SECONDS_PER_HOUR: i64 = 60 * SECONDS_PER_MINUTE;
-const SECONDS_PER_DAY: i64 = 24 * SECONDS_PER_HOUR;
-const RELATIVE_AGE_MAX_DAYS: i64 = 30;
-
 /// `"just now"`, `"5m ago"`, `"6h ago"`, `"2d ago"`; older than a month shows the date.
 pub fn format_relative_age(epoch_secs: i64, now_epoch_secs: i64) -> String {
     let age_secs = (now_epoch_secs - epoch_secs).max(0);
@@ -83,7 +78,7 @@ pub fn format_relative_age(epoch_secs: i64, now_epoch_secs: i64) -> String {
         .to_string()
 }
 
-pub fn now_epoch_secs() -> i64 {
+pub fn read_current_epoch_secs() -> i64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since_epoch| since_epoch.as_secs() as i64)

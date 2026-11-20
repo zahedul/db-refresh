@@ -2,21 +2,22 @@ use dioxus::prelude::*;
 
 use crate::aws::s3::{SearchRequest, search_dump_files};
 use crate::error::AppError;
-use crate::ui::SearchState;
+use crate::settings::Settings;
 use crate::ui::app_context::use_app_context;
 use crate::ui::folder_browser::FolderBrowser;
 use crate::ui::icons::{CloudIcon, SearchIcon};
 use crate::ui::panel_header::PanelHeader;
 use crate::ui::plain_text_input::PlainTextInput;
 use crate::ui::profile_picker::{ProfileList, ProfilePicker};
+use crate::ui::state::SearchState;
 
 #[component]
 pub fn ConnectPanel(
     profiles: Signal<ProfileList>,
     selected_profile: Signal<Option<String>>,
-    search_state: Signal<SearchState>,
+    mut search_state: Signal<SearchState>,
 ) -> Element {
-    let mut settings = use_app_context().settings;
+    let settings = use_app_context().settings;
     let mut bucket = use_signal(|| settings.peek().bucket.clone());
     // Updated only when the bucket field is committed (Enter / leaving the field),
     // so folders are not fetched on every keystroke.
@@ -24,52 +25,24 @@ pub fn ConnectPanel(
     let mut prefix = use_signal(|| settings.peek().folder_prefix.clone());
     let name_filter = use_signal(String::new);
 
-    // Re-runs whenever one of these signals changes, so every choice is remembered
-    // (App saves `settings` to disk when it changes).
-    use_effect(move || {
-        let (profile, bucket_name, folder_prefix) =
-            (selected_profile(), committed_bucket(), prefix());
-        let is_unchanged = {
-            let current = settings.peek();
-            current.profile == profile
-                && current.bucket == bucket_name
-                && current.folder_prefix == folder_prefix
-        };
-        if is_unchanged {
-            return;
-        }
-        settings.with_mut(|current| {
-            current.profile = profile;
-            current.bucket = bucket_name;
-            current.folder_prefix = folder_prefix;
-        });
-    });
+    use_remembered_source(settings, selected_profile, committed_bucket, prefix);
 
-    let mut start_search = move || {
-        if search_state.peek().is_searching() {
-            return;
-        }
+    let start_search = move || {
         let Some(profile) = selected_profile() else {
-            search_state.set(SearchState::Failed(AppError::MissingProfile));
+            search_state
+                .clone()
+                .set(SearchState::Failed(AppError::MissingProfile));
             return;
         };
-        let request = SearchRequest {
-            profile,
-            bucket: bucket(),
-            prefix: prefix(),
-            name_filter: name_filter(),
-        };
-
-        search_state.set(SearchState::Searching {
-            s3_location: request.s3_location(),
-        });
-        spawn(async move {
-            let next_state = match search_dump_files(request).await {
-                Ok(result) => SearchState::Found(result),
-                Err(error) => SearchState::Failed(error),
-            };
-            search_state.set(next_state);
-        });
+        start_dump_search(
+            search_state,
+            SearchRequest {
+                profile,
+                bucket: bucket(),
+                prefix: prefix(),
+                name_filter: name_filter(),
+            },
+        );
     };
 
     rsx! {
@@ -121,12 +94,57 @@ pub fn ConnectPanel(
             }
             SearchButton {
                 is_searching: search_state.read().is_searching(),
-                missing_input: missing_search_input(selected_profile.read().is_some(), &bucket()),
-                location: search_location(&bucket(), &prefix()),
+                missing_input: find_missing_search_input(selected_profile.read().is_some(), &bucket()),
+                location: format_search_location(&bucket(), &prefix()),
                 on_search: move |_| start_search(),
             }
         }
     }
+}
+
+/// Saves the chosen profile, bucket and folder whenever they change, so they are
+/// filled in again next time (App writes `settings` to disk).
+fn use_remembered_source(
+    mut settings: Signal<Settings>,
+    selected_profile: Signal<Option<String>>,
+    committed_bucket: Signal<String>,
+    prefix: Signal<String>,
+) {
+    use_effect(move || {
+        let (profile, bucket_name, folder_prefix) =
+            (selected_profile(), committed_bucket(), prefix());
+        let is_unchanged = {
+            let current = settings.peek();
+            current.profile == profile
+                && current.bucket == bucket_name
+                && current.folder_prefix == folder_prefix
+        };
+        if is_unchanged {
+            return;
+        }
+        settings.with_mut(|current| {
+            current.profile = profile;
+            current.bucket = bucket_name;
+            current.folder_prefix = folder_prefix;
+        });
+    });
+}
+
+/// Lists matching dumps in the background; ignored while a search is already running.
+fn start_dump_search(mut search_state: Signal<SearchState>, request: SearchRequest) {
+    if search_state.peek().is_searching() {
+        return;
+    }
+    search_state.set(SearchState::Searching {
+        s3_location: request.s3_location(),
+    });
+    spawn(async move {
+        let next_state = match search_dump_files(request).await {
+            Ok(result) => SearchState::Found(result),
+            Err(error) => SearchState::Failed(error),
+        };
+        search_state.set(next_state);
+    });
 }
 
 #[component]
@@ -163,7 +181,7 @@ fn SearchButton(
     }
 }
 
-fn missing_search_input(has_profile: bool, bucket: &str) -> Option<String> {
+fn find_missing_search_input(has_profile: bool, bucket: &str) -> Option<String> {
     if !has_profile {
         return Some("Select an AWS profile to search.".to_string());
     }
@@ -173,7 +191,7 @@ fn missing_search_input(has_profile: bool, bucket: &str) -> Option<String> {
     None
 }
 
-fn search_location(bucket: &str, prefix: &str) -> String {
+fn format_search_location(bucket: &str, prefix: &str) -> String {
     format!("s3://{}/{prefix}", bucket.trim())
 }
 
@@ -184,20 +202,20 @@ mod tests {
     #[test]
     fn search_needs_profile_then_bucket() {
         assert_eq!(
-            missing_search_input(false, "bucket").as_deref(),
+            find_missing_search_input(false, "bucket").as_deref(),
             Some("Select an AWS profile to search.")
         );
         assert_eq!(
-            missing_search_input(true, "  ").as_deref(),
+            find_missing_search_input(true, "  ").as_deref(),
             Some("Enter a bucket to search.")
         );
-        assert_eq!(missing_search_input(true, "bucket"), None);
+        assert_eq!(find_missing_search_input(true, "bucket"), None);
     }
 
     #[test]
     fn search_location_shows_bucket_and_folder() {
         assert_eq!(
-            search_location(" prod-db-backup ", "backups/"),
+            format_search_location(" prod-db-backup ", "backups/"),
             "s3://prod-db-backup/backups/"
         );
     }

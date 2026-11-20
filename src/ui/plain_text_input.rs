@@ -10,7 +10,7 @@ pub fn PlainTextInput(
     on_commit: Option<EventHandler<String>>,
     /// Fires when Enter is pressed in the field.
     on_enter: Option<EventHandler<()>>,
-    #[props(default)] focus_on_mount: bool,
+    #[props(default)] should_focus_on_mount: bool,
 ) -> Element {
     rsx! {
         input {
@@ -21,7 +21,7 @@ pub fn PlainTextInput(
                 }
             },
             onmounted: move |event| async move {
-                if focus_on_mount {
+                if should_focus_on_mount {
                     // Focus failing only means the user has to click the field.
                     let _ = event.set_focus(true).await;
                 }

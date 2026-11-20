@@ -8,11 +8,15 @@
 # Connection settings come from the environment (with local defaults):
 #   PGHOST (localhost)  PGPORT (5432)  PGUSER (postgres)  RESTORE_JOBS (4)
 #
-# Clean slate (optional):
-#   RECREATE_DATABASE=1   drop and create the database before restoring, so it becomes an
-#                         exact copy of the dump. Other connections to it are closed first.
-#                         The user must own the database and have CREATEDB.
-#   MAINTENANCE_DB        database to connect to while recreating (postgres)
+# What happens to existing data (RESTORE_MODE):
+#   clean          pg_restore drops and recreates each object in the dump (--clean).
+#                  Objects that exist only locally can block schema drops. (default)
+#   drop-schemas   DROP SCHEMA ... CASCADE for every schema in the dump, in one
+#                  transaction, then restore. The user must own those schemas.
+#   recreate       drop and create the whole database, then restore. Other connections
+#                  are closed first. The user must own the database and have CREATEDB.
+#   RECREATE_DATABASE=1 is accepted as an alias for RESTORE_MODE=recreate.
+#   MAINTENANCE_DB  database to connect to while recreating (postgres)
 #
 # Password: never stored here. Postgres tools read it from ~/.pgpass
 # (line format: host:port:database:user:password, file mode 600),
@@ -33,7 +37,8 @@ HOST="${PGHOST:-localhost}"
 PORT="${PGPORT:-5432}"
 USER="${PGUSER:-postgres}"
 JOBS="${RESTORE_JOBS:-4}"
-RECREATE_DATABASE="${RECREATE_DATABASE:-0}"
+RESTORE_MODE="${RESTORE_MODE:-clean}"
+[[ "${RECREATE_DATABASE:-0}" == 1 ]] && RESTORE_MODE="recreate"
 MAINTENANCE_DB="${MAINTENANCE_DB:-postgres}"
 
 export PGCONNECT_TIMEOUT=10
@@ -41,6 +46,14 @@ export PGCONNECT_TIMEOUT=10
 # ==========================================
 # Validation
 # ==========================================
+
+case "$RESTORE_MODE" in
+    clean | drop-schemas | recreate) ;;
+    *)
+        echo "ERROR: Unknown RESTORE_MODE \"$RESTORE_MODE\" (use clean, drop-schemas or recreate)."
+        exit 2
+        ;;
+esac
 
 for cmd in pg_restore psql; do
     command -v "$cmd" >/dev/null 2>&1 || {
@@ -68,7 +81,7 @@ echo "User       : $USER"
 echo "Database   : $DATABASE"
 echo "Dump       : $DUMP_FILE"
 echo "Jobs       : $JOBS"
-echo "Recreate   : $( [[ "$RECREATE_DATABASE" == 1 ]] && echo yes || echo no )"
+echo "Mode       : $RESTORE_MODE"
 echo "=========================================="
 
 # ==========================================
@@ -79,7 +92,9 @@ echo "Testing connection..."
 
 # When recreating, the target may not exist yet, so test the maintenance database instead.
 CONNECT_DB="$DATABASE"
-[[ "$RECREATE_DATABASE" == 1 ]] && CONNECT_DB="$MAINTENANCE_DB"
+if [[ "$RESTORE_MODE" == "recreate" ]]; then
+    CONNECT_DB="$MAINTENANCE_DB"
+fi
 
 psql -X -w \
     -h "$HOST" \
@@ -92,13 +107,49 @@ psql -X -w \
         exit 1
     }
 
-# ==========================================
-# Recreate Database (clean slate)
-# ==========================================
-
 CLEAN_OPTIONS=(--clean --if-exists)
 
-if [[ "$RECREATE_DATABASE" == 1 ]]; then
+# ==========================================
+# Drop the dump's schemas (drop-schemas mode)
+# ==========================================
+
+if [[ "$RESTORE_MODE" == "drop-schemas" ]]; then
+    # TOC lines look like: "123; 2615 16385 SCHEMA - auth owner_name".
+    DUMP_SCHEMAS="$(pg_restore -l "$DUMP_FILE" | awk '$4 == "SCHEMA" && $5 == "-" { print $6 }' | paste -sd, -)"
+
+    if [[ -z "$DUMP_SCHEMAS" ]]; then
+        echo "No schemas in the dump to drop; restoring with --clean."
+    else
+        echo "Dropping schemas: ${DUMP_SCHEMAS//,/, }..."
+
+        # One transaction: if any drop fails (e.g. not the owner), nothing is dropped.
+        # format(%I) quotes each name; \gexec runs the generated statements.
+        psql -X -w -q \
+            -h "$HOST" \
+            -p "$PORT" \
+            -U "$USER" \
+            -d "$DATABASE" \
+            -v ON_ERROR_STOP=1 \
+            -v schemas="$DUMP_SCHEMAS" >/dev/null <<'SQL' || {
+BEGIN;
+SELECT format('DROP SCHEMA IF EXISTS %I CASCADE', schema_name)
+  FROM unnest(string_to_array(:'schemas', ',')) AS schema_name
+\gexec
+COMMIT;
+SQL
+            echo "ERROR: Could not drop the schemas, so nothing was changed. The user must own them (ALTER SCHEMA <name> OWNER TO $USER;)."
+            exit 1
+        }
+
+        echo "Schemas dropped. Objects outside them are replaced by --clean."
+    fi
+fi
+
+# ==========================================
+# Recreate Database (recreate mode)
+# ==========================================
+
+if [[ "$RESTORE_MODE" == "recreate" ]]; then
     echo "Recreating database $DATABASE..."
 
     # Check CREATEDB before dropping: otherwise an owner without it would lose the

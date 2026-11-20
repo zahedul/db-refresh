@@ -57,7 +57,7 @@ pub fn ProfilePicker(
                     PlainTextInput {
                         value: profile_filter,
                         placeholder: "Filter profiles…",
-                        focus_on_mount: true,
+                        should_focus_on_mount: true,
                     }
                     ProfileOptions {
                         profiles: profiles.read().clone(),

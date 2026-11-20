@@ -1,7 +1,9 @@
 use dioxus::prelude::*;
 
 use crate::aws::s3::list_folders;
-use crate::aws::s3_path::{breadcrumbs, contains_ignoring_case, display_path, folder_name};
+use crate::aws::s3_path::{
+    build_breadcrumbs, contains_ignoring_case, display_path, extract_folder_name,
+};
 use crate::error::AppError;
 use crate::ui::icons::FolderIcon;
 use crate::ui::picker::{
@@ -63,7 +65,7 @@ pub fn FolderBrowser(profile: String, bucket: String, prefix: Signal<String>) ->
                 PickerPopover { on_close: move |_| is_open.set(false),
                     nav { class: "breadcrumbs",
                         button { class: "crumb", onclick: move |_| browse_to(String::new()), "{bucket}" }
-                        for crumb in breadcrumbs(&current_prefix) {
+                        for crumb in build_breadcrumbs(&current_prefix) {
                             span { key: "{crumb.prefix}", class: "crumb-item",
                                 span { class: "crumb-separator", "›" }
                                 button {
@@ -77,7 +79,7 @@ pub fn FolderBrowser(profile: String, bucket: String, prefix: Signal<String>) ->
                     PlainTextInput {
                         value: folder_filter,
                         placeholder: "Filter folders…",
-                        focus_on_mount: true,
+                        should_focus_on_mount: true,
                     }
                     FolderOptions {
                         listing: listing.read().clone(),
@@ -118,7 +120,7 @@ fn FolderOptions(
     let visible_folders: Vec<String> = folders
         .into_iter()
         .filter(|folder| {
-            contains_ignoring_case(folder_name(folder, &current_prefix), &folder_filter)
+            contains_ignoring_case(extract_folder_name(folder, &current_prefix), &folder_filter)
         })
         .collect();
     if visible_folders.is_empty() {
@@ -131,7 +133,7 @@ fn FolderOptions(
                 PickerRow {
                     key: "{folder}",
                     icon: rsx! { FolderIcon {} },
-                    label: folder_name(&folder, &current_prefix).to_string(),
+                    label: extract_folder_name(&folder, &current_prefix).to_string(),
                     trailing: "›",
                     on_pick: {
                         let folder = folder.clone();

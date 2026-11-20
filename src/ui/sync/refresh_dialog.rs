@@ -3,14 +3,15 @@ use dioxus::prelude::*;
 use crate::aws::s3::{DumpFile, SearchRequest, search_dump_files};
 use crate::database::credentials::unlock_password;
 use crate::database::target::{DatabaseTarget, DumpSource};
-use crate::dump_name::with_group_prefix;
+use crate::dump_name::add_group_prefix;
 use crate::error::AppError;
-use crate::format::{format_relative_age, format_size, now_epoch_secs};
-use crate::local_files::{has_complete_local_copy, local_path_for};
+use crate::format::{format_relative_age, format_size, read_current_epoch_secs};
+use crate::local_files::has_complete_local_copy;
+use crate::settings::Settings;
 use crate::ui::app_context::use_app_context;
 use crate::ui::icons::RefreshIcon;
 use crate::ui::modal::Modal;
-use crate::ui::sync::data_loss_warning;
+use crate::ui::sync::describe_data_loss;
 use crate::ui::sync::restore_runner::{RefreshPlan, start_refresh};
 
 /// Finds the newest dump in the target's source and asks before replacing the data.
@@ -28,52 +29,29 @@ pub fn RefreshLatestDialog(target: DatabaseTarget, on_close: EventHandler<()>) -
     });
 
     // Only a found dump can be refreshed; everything else shows a message instead.
-    let found_dump = match &*latest_dump.read() {
-        Some(Ok(Some(dump))) => Some(dump.clone()),
+    let refresh_choice = match &*latest_dump.read() {
+        Some(Ok(Some(dump))) => Some(choose_refresh(&app.settings.read(), &target, dump)),
         _ => None,
     };
-    let plan_parts = found_dump.as_ref().map(|dump| {
-        let previous_name = app.settings.read().downloaded_files.get(&dump.key).cloned();
-        let local_file_name = refresh_file_name(
-            previous_name.as_deref(),
-            dump.file_name(),
-            &target.dump_group,
-        );
-        let is_on_disk =
-            has_complete_local_copy(&local_path_for(&local_file_name), dump.size_bytes);
-        (dump.clone(), local_file_name, is_on_disk)
-    });
 
     let confirm = {
-        let (target, plan_parts) = (target.clone(), plan_parts.clone());
+        let (target, refresh_choice) = (target.clone(), refresh_choice.clone());
         move |_| {
-            let Some((latest_dump, local_file_name, is_on_disk)) = plan_parts.clone() else {
+            let Some(choice) = refresh_choice.clone() else {
                 return;
             };
-            let target = target.clone();
             is_unlocking.set(true);
+            let target = target.clone();
             spawn(async move {
                 let unlocked = unlock_password(&target, &typed_password()).await;
                 is_unlocking.set(false);
-                let password = match unlocked {
-                    Ok(password) => password,
-                    Err(password_error) => {
-                        error.set(Some(password_error.to_string()));
-                        return;
+                match unlocked {
+                    Ok(password) => {
+                        start_refresh(app, choice.into_plan(target, password));
+                        on_close.call(());
                     }
-                };
-                start_refresh(
-                    app,
-                    RefreshPlan {
-                        source: target.dump_source.clone(),
-                        target,
-                        latest_dump,
-                        local_file_name,
-                        needs_download: !is_on_disk,
-                        password,
-                    },
-                );
-                on_close.call(());
+                    Err(password_error) => error.set(Some(password_error.to_string())),
+                }
             });
         }
     };
@@ -104,14 +82,14 @@ pub fn RefreshLatestDialog(target: DatabaseTarget, on_close: EventHandler<()>) -
                 Some(Ok(Some(_))) => rsx! {},
             }
 
-            if let Some((dump, local_file_name, is_on_disk)) = &plan_parts {
+            if let Some(choice) = &refresh_choice {
                 RefreshPreview {
-                    dump: dump.clone(),
-                    local_file_name: local_file_name.clone(),
-                    is_on_disk: *is_on_disk,
+                    dump: choice.latest_dump.clone(),
+                    local_file_name: choice.local_file_name.clone(),
+                    is_on_disk: choice.is_on_disk,
                     target: target.clone(),
                 }
-                div { class: "warning-box", "{data_loss_warning(&target)}" }
+                div { class: "warning-box", "{describe_data_loss(&target)}" }
                 if !target.is_password_saved {
                     div { class: "form-field",
                         span { class: "field-label", "Password for {target.user}" }
@@ -133,7 +111,7 @@ pub fn RefreshLatestDialog(target: DatabaseTarget, on_close: EventHandler<()>) -
                 button { class: "secondary", onclick: move |_| on_close.call(()), "Cancel" }
                 button {
                     class: "danger with-icon",
-                    disabled: plan_parts.is_none() || is_unlocking(),
+                    disabled: refresh_choice.is_none() || is_unlocking(),
                     onclick: confirm,
                     RefreshIcon {}
                     if is_unlocking() { "Waiting for Touch ID…" } else { "Refresh now" }
@@ -143,7 +121,7 @@ pub fn RefreshLatestDialog(target: DatabaseTarget, on_close: EventHandler<()>) -
     }
 }
 
-/// `2026-11-20T040016.dump · 1.0 GB · 6h ago` → `gen_optimus_db`, with what will happen.
+/// `2026-11-20T040016.dump · 1.0 GB · 6h ago` → `app_db`, with what will happen.
 #[component]
 fn RefreshPreview(
     dump: DumpFile,
@@ -153,7 +131,7 @@ fn RefreshPreview(
 ) -> Element {
     let age = dump
         .last_modified_epoch_secs
-        .map(|modified| format_relative_age(modified, now_epoch_secs()))
+        .map(|modified| format_relative_age(modified, read_current_epoch_secs()))
         .unwrap_or_default();
     let download_step = if is_on_disk {
         "Already on disk, no download needed".to_string()
@@ -179,6 +157,43 @@ fn RefreshPreview(
     }
 }
 
+/// What "Refresh latest" found and decided, before the user confirms.
+#[derive(Clone, Debug, PartialEq)]
+struct RefreshChoice {
+    latest_dump: DumpFile,
+    local_file_name: String,
+    is_on_disk: bool,
+}
+
+impl RefreshChoice {
+    fn into_plan(self, target: DatabaseTarget, password: Option<String>) -> RefreshPlan {
+        RefreshPlan {
+            source: target.dump_source.clone(),
+            target,
+            latest_dump: self.latest_dump,
+            local_file_name: self.local_file_name,
+            should_download: !self.is_on_disk,
+            password,
+        }
+    }
+}
+
+/// Picks the local name for `dump` and checks whether it is already downloaded.
+fn choose_refresh(settings: &Settings, target: &DatabaseTarget, dump: &DumpFile) -> RefreshChoice {
+    let previous_name = settings.downloaded_files.get(&dump.key).map(String::as_str);
+    let local_file_name =
+        choose_refresh_file_name(previous_name, dump.file_name(), &target.dump_group);
+    let is_on_disk = has_complete_local_copy(
+        &settings.download_path_for(&local_file_name),
+        dump.size_bytes,
+    );
+    RefreshChoice {
+        latest_dump: dump.clone(),
+        local_file_name,
+        is_on_disk,
+    }
+}
+
 /// Newest dump in the source (search results are sorted newest first).
 async fn find_latest_dump(source: &DumpSource) -> Result<Option<DumpFile>, AppError> {
     let request = SearchRequest {
@@ -193,14 +208,18 @@ async fn find_latest_dump(source: &DumpSource) -> Result<Option<DumpFile>, AppEr
 
 /// The name used before for this dump wins (so it isn't downloaded twice); otherwise
 /// the target's prefix is added, so the file is recognised as this database's dump.
-fn refresh_file_name(previous_name: Option<&str>, s3_file_name: &str, dump_group: &str) -> String {
+fn choose_refresh_file_name(
+    previous_name: Option<&str>,
+    s3_file_name: &str,
+    dump_group: &str,
+) -> String {
     if let Some(previous_name) = previous_name {
         return previous_name.to_string();
     }
     if dump_group.is_empty() {
         return s3_file_name.to_string();
     }
-    with_group_prefix(dump_group, s3_file_name)
+    add_group_prefix(dump_group, s3_file_name)
 }
 
 #[cfg(test)]
@@ -210,10 +229,13 @@ mod tests {
     #[test]
     fn refresh_file_name_reuses_earlier_name_then_adds_prefix() {
         assert_eq!(
-            refresh_file_name(Some("mine.dump"), "2026.dump", "gen"),
+            choose_refresh_file_name(Some("mine.dump"), "2026.dump", "gen"),
             "mine.dump"
         );
-        assert_eq!(refresh_file_name(None, "2026.dump", "gen"), "gen_2026.dump");
-        assert_eq!(refresh_file_name(None, "2026.dump", ""), "2026.dump");
+        assert_eq!(
+            choose_refresh_file_name(None, "2026.dump", "gen"),
+            "gen_2026.dump"
+        );
+        assert_eq!(choose_refresh_file_name(None, "2026.dump", ""), "2026.dump");
     }
 }

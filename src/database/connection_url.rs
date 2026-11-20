@@ -1,6 +1,6 @@
 //! Parses `postgres://user:password@host:5432/database` so a pasted URL can fill the form.
 
-const URL_SCHEMES: [&str; 2] = ["postgresql://", "postgres://"];
+use crate::constants::POSTGRES_URL_SCHEMES;
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct ConnectionUrl {
@@ -14,7 +14,7 @@ pub struct ConnectionUrl {
 /// `None` when the text is not a PostgreSQL connection URL.
 pub fn parse_connection_url(text: &str) -> Option<ConnectionUrl> {
     let text = text.trim();
-    let after_scheme = URL_SCHEMES
+    let after_scheme = POSTGRES_URL_SCHEMES
         .iter()
         .find_map(|scheme| text.strip_prefix(scheme))?;
     // Query (`?sslmode=…`) and fragment are not needed to fill the form.
@@ -39,9 +39,9 @@ pub fn parse_connection_url(text: &str) -> Option<ConnectionUrl> {
     Some(ConnectionUrl {
         host: percent_decode(host),
         port,
-        user: non_empty(user).map(percent_decode),
+        user: filter_non_empty(user).map(percent_decode),
         password: password.map(percent_decode),
-        database: non_empty(database).map(percent_decode),
+        database: filter_non_empty(database).map(percent_decode),
     })
 }
 
@@ -59,7 +59,7 @@ fn split_host_and_port(host_and_port: &str) -> Option<(&str, Option<u16>)> {
     Some((host, port))
 }
 
-fn non_empty(value: Option<&str>) -> Option<&str> {
+fn filter_non_empty(value: Option<&str>) -> Option<&str> {
     value.filter(|value| !value.is_empty())
 }
 

@@ -57,11 +57,19 @@ rm -rf "$BUNDLE_DIR"
 APP_PATH="${BUNDLE_DIR}/${APP_NAME}.app"
 [[ -d "$APP_PATH" ]] || fail "Bundle not found at ${APP_PATH}"
 
+# An "Apple Development" certificate (free with an Apple ID in Xcode) carries a Team ID,
+# which gives the app a stable Keychain partition: "Always Allow" then survives updates.
+APPLE_DEVELOPMENT_IDENTITY="$(security find-identity -v -p codesigning | grep -o '"Apple Development: [^"]*"' | head -1 | tr -d '"' || true)"
+
 SIGNING_MODE="ad-hoc"
 if [[ -n "$SIGNING_IDENTITY" ]]; then
     SIGNING_MODE="developer-id"
     step "Signing with ${SIGNING_IDENTITY} (hardened runtime)"
     codesign --force --options runtime --timestamp --sign "$SIGNING_IDENTITY" "$APP_PATH"
+elif [[ -n "$APPLE_DEVELOPMENT_IDENTITY" ]]; then
+    SIGNING_MODE="apple-development"
+    step "Signing with ${APPLE_DEVELOPMENT_IDENTITY}"
+    codesign --force --options runtime --sign "$APPLE_DEVELOPMENT_IDENTITY" "$APP_PATH"
 elif security find-identity -v -p codesigning | grep -q "\"$LOCAL_IDENTITY\""; then
     # A stable identity keeps Keychain "Always Allow" working across builds.
     SIGNING_MODE="local"
@@ -116,8 +124,10 @@ if [[ -n "$NOTARY_PROFILE" ]]; then
     echo " Signing  : Developer ID, notarized (opens without warnings)"
 elif [[ -n "$SIGNING_IDENTITY" ]]; then
     echo " Signing  : Developer ID, not notarized (users see one warning)"
+elif [[ "$SIGNING_MODE" == "apple-development" ]]; then
+    echo " Signing  : Apple Development (stable Keychain access on this Mac; other Macs: Open Anyway once)"
 elif [[ "$SIGNING_MODE" == "local" ]]; then
-    echo " Signing  : local certificate (Keychain access survives updates; other Macs: Open Anyway once)"
+    echo " Signing  : local certificate (no Team ID: macOS asks once per update for the saved passwords)"
 else
     echo " Signing  : ad-hoc (users allow it once: System Settings → Privacy & Security → Open Anyway)"
 fi

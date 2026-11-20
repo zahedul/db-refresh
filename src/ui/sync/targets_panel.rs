@@ -104,11 +104,11 @@ fn TargetCard(
                 }
                 if target.is_password_saved {
                     span { class: "target-keychain",
-                        if target.require_touch_id { "🔑 Password in Keychain · Touch ID" } else { "🔑 Password in Keychain" }
+                        if target.should_require_touch_id { "🔑 Password in Keychain · Touch ID" } else { "🔑 Password in Keychain" }
                     }
                 }
-                if target.recreate_database {
-                    span { class: "target-keychain", title: "Deleted and recreated before each restore", "✨ Starts empty on restore" }
+                span { class: "target-keychain", title: "{target.restore_mode.description()}",
+                    "🧹 {target.restore_mode.label()}"
                 }
                 if target.dump_source.is_configured() {
                     button {

@@ -9,15 +9,9 @@ use aws_sdk_s3::operation::list_objects_v2::ListObjectsV2Error;
 use aws_sdk_s3::types::Object;
 
 use crate::aws::s3_path::contains_ignoring_case;
-use crate::dump_name::dump_group;
+use crate::constants::{MAX_FOLDER_LIST_PAGES, MAX_SCANNED_OBJECTS, S3_FOLDER_SEPARATOR};
+use crate::dump_name::extract_dump_group;
 use crate::error::AppError;
-
-// Stops runaway listings on huge buckets; 50 pages of 1000 keys.
-const MAX_SCANNED_OBJECTS: usize = 50_000;
-// Folder listing also pages through the files at that level; cap it so a folder
-// holding thousands of dumps does not make the dropdown slow.
-const MAX_FOLDER_LIST_PAGES: usize = 10;
-const FOLDER_DELIMITER: &str = "/";
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SearchRequest {
@@ -70,14 +64,14 @@ impl DumpFile {
         self.key.rsplit('/').next().unwrap_or(&self.key)
     }
 
-    /// See `dump_group`: `gen_2026-11-20.dump` -> `gen`.
+    /// See `extract_dump_group`: `gen_2026-11-20.dump` -> `gen`.
     pub fn group(&self) -> Option<&str> {
-        dump_group(self.file_name())
+        extract_dump_group(self.file_name())
     }
 }
 
 /// Keys of the newest file in each group. Expects files sorted newest first.
-pub fn latest_file_per_group(dump_files: &[DumpFile]) -> HashSet<&str> {
+pub fn find_latest_file_per_group(dump_files: &[DumpFile]) -> HashSet<&str> {
     let mut seen_groups = HashSet::new();
     dump_files
         .iter()
@@ -125,8 +119,8 @@ pub async fn list_folders(
     let mut pages = client
         .list_objects_v2()
         .bucket(bucket)
-        .delimiter(FOLDER_DELIMITER)
-        .set_prefix(non_empty(parent_prefix))
+        .delimiter(S3_FOLDER_SEPARATOR)
+        .set_prefix(filter_non_empty(parent_prefix))
         .into_paginator()
         .send();
 
@@ -197,7 +191,7 @@ async fn list_matching_dump_files(
     let mut pages = client
         .list_objects_v2()
         .bucket(&request.bucket)
-        .set_prefix(non_empty(&request.prefix))
+        .set_prefix(filter_non_empty(&request.prefix))
         .into_paginator()
         .send();
 
@@ -243,7 +237,7 @@ fn to_app_error(error: SdkError<ListObjectsV2Error>, profile: &str, bucket: &str
     }
 }
 
-fn non_empty(value: &str) -> Option<String> {
+fn filter_non_empty(value: &str) -> Option<String> {
     Some(value.to_string()).filter(|value| !value.is_empty())
 }
 
@@ -288,8 +282,8 @@ mod tests {
 
     #[test]
     fn non_empty_turns_blank_into_none() {
-        assert_eq!(non_empty(""), None);
-        assert_eq!(non_empty("backups/"), Some("backups/".to_string()));
+        assert_eq!(filter_non_empty(""), None);
+        assert_eq!(filter_non_empty("backups/"), Some("backups/".to_string()));
     }
 
     #[test]
@@ -310,7 +304,7 @@ mod tests {
             dump_file("gen_2.dump", Some(2)),
             dump_file("plain.dump", Some(1)),
         ];
-        let latest = latest_file_per_group(&files);
+        let latest = find_latest_file_per_group(&files);
         assert_eq!(
             latest,
             HashSet::from(["gen_3.dump", "mad_3.dump", "plain.dump"])

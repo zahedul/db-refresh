@@ -6,10 +6,8 @@ use std::process::Command;
 use std::time::UNIX_EPOCH;
 use std::{env, fs, io};
 
+use crate::constants::DUMP_EXTENSION;
 use dioxus::logger::tracing;
-
-const DOWNLOAD_FOLDER_NAME: &str = "db-refresh-dumps";
-const DUMP_EXTENSION: &str = "dump";
 
 /// A dump file on this Mac that can be restored.
 #[derive(Clone, Debug, PartialEq)]
@@ -66,14 +64,10 @@ pub fn list_local_dumps(dir: &Path) -> Vec<LocalDump> {
     dumps
 }
 
-/// `~/Downloads/db-refresh-dumps`
-pub fn download_dir() -> PathBuf {
+/// `~/Downloads` - where dumps are saved unless the user picks another folder.
+pub fn resolve_default_download_folder() -> PathBuf {
     let home = env::home_dir().unwrap_or_else(env::temp_dir);
-    home.join("Downloads").join(DOWNLOAD_FOLDER_NAME)
-}
-
-pub fn local_path_for(file_name: &str) -> PathBuf {
-    download_dir().join(file_name)
+    home.join("Downloads")
 }
 
 /// True when the file is already on disk with the expected size, so it need not be downloaded again.
@@ -105,10 +99,8 @@ mod tests {
     use super::*;
 
     #[test]
-    fn local_path_is_inside_download_dir() {
-        let path = local_path_for("gen_2026.dump");
-        assert!(path.starts_with(download_dir()));
-        assert!(path.ends_with("db-refresh-dumps/gen_2026.dump"));
+    fn default_download_folder_is_downloads() {
+        assert!(resolve_default_download_folder().ends_with("Downloads"));
     }
 
     #[test]

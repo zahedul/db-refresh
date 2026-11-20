@@ -1,7 +1,6 @@
 //! Pure helpers for S3 "folder" prefixes such as `backups/gen/`.
 
-const FOLDER_SEPARATOR: char = '/';
-const WHOLE_BUCKET_LABEL: &str = "Whole bucket";
+use crate::constants::{S3_FOLDER_SEPARATOR, WHOLE_BUCKET_LABEL};
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Breadcrumb {
@@ -11,14 +10,14 @@ pub struct Breadcrumb {
 }
 
 /// `"backups/gen/"` -> `[backups -> "backups/", gen -> "backups/gen/"]`
-pub fn breadcrumbs(prefix: &str) -> Vec<Breadcrumb> {
+pub fn build_breadcrumbs(prefix: &str) -> Vec<Breadcrumb> {
     let mut crumbs = Vec::new();
     let mut prefix_so_far = String::new();
 
-    for piece in prefix.split_inclusive(FOLDER_SEPARATOR) {
+    for piece in prefix.split_inclusive(S3_FOLDER_SEPARATOR) {
         // Build from the raw pieces so unusual keys like `a//b/` keep their exact prefix.
         prefix_so_far.push_str(piece);
-        let label = piece.trim_end_matches(FOLDER_SEPARATOR);
+        let label = piece.trim_end_matches(S3_FOLDER_SEPARATOR);
         if label.is_empty() {
             continue;
         }
@@ -33,7 +32,7 @@ pub fn breadcrumbs(prefix: &str) -> Vec<Breadcrumb> {
 
 /// `"backups/gen/"` -> `"backups / gen"`, `""` -> `"Whole bucket"`
 pub fn display_path(prefix: &str) -> String {
-    let labels: Vec<String> = breadcrumbs(prefix)
+    let labels: Vec<String> = build_breadcrumbs(prefix)
         .into_iter()
         .map(|crumb| crumb.label)
         .collect();
@@ -45,11 +44,11 @@ pub fn display_path(prefix: &str) -> String {
 }
 
 /// `("backups/gen/", "backups/")` -> `"gen"`
-pub fn folder_name<'a>(folder_prefix: &'a str, parent_prefix: &str) -> &'a str {
+pub fn extract_folder_name<'a>(folder_prefix: &'a str, parent_prefix: &str) -> &'a str {
     folder_prefix
         .strip_prefix(parent_prefix)
         .unwrap_or(folder_prefix)
-        .trim_end_matches(FOLDER_SEPARATOR)
+        .trim_end_matches(S3_FOLDER_SEPARATOR)
 }
 
 pub fn contains_ignoring_case(text: &str, needle: &str) -> bool {
@@ -70,16 +69,16 @@ mod tests {
     #[test]
     fn breadcrumbs_build_cumulative_prefixes() {
         assert_eq!(
-            breadcrumbs("backups/gen/"),
+            build_breadcrumbs("backups/gen/"),
             vec![crumb("backups", "backups/"), crumb("gen", "backups/gen/")]
         );
-        assert!(breadcrumbs("").is_empty());
+        assert!(build_breadcrumbs("").is_empty());
     }
 
     #[test]
     fn breadcrumbs_keep_exact_prefix_for_double_slashes() {
         assert_eq!(
-            breadcrumbs("a//b/"),
+            build_breadcrumbs("a//b/"),
             vec![crumb("a", "a/"), crumb("b", "a//b/")]
         );
     }
@@ -92,8 +91,8 @@ mod tests {
 
     #[test]
     fn folder_name_strips_parent_and_trailing_slash() {
-        assert_eq!(folder_name("backups/gen/", "backups/"), "gen");
-        assert_eq!(folder_name("backups/", ""), "backups");
+        assert_eq!(extract_folder_name("backups/gen/", "backups/"), "gen");
+        assert_eq!(extract_folder_name("backups/", ""), "backups");
     }
 
     #[test]

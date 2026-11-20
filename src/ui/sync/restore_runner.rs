@@ -9,21 +9,19 @@ use dioxus::prelude::*;
 
 use crate::aws::download::{DownloadProgress, DownloadRequest, download_dump_file};
 use crate::aws::s3::DumpFile;
+use crate::constants::MAX_KEPT_LOG_LINES;
 use crate::database::log_line::{LogLevel, LogLine, RestoreLog};
 use crate::database::restore::{
-    RestoreExit, RestorePhase, RestoreRequest, ignored_error_count, phase_started_by, run_restore,
-    stop_restore,
+    RestoreExit, RestorePhase, RestoreRequest, detect_started_phase, parse_ignored_error_count,
+    run_restore, stop_restore,
 };
 use crate::database::target::{DatabaseTarget, DumpSource};
 use crate::error::AppError;
 use crate::format::format_duration;
-use crate::local_files::{display_local_path, local_path_for};
+use crate::local_files::display_local_path;
 use crate::ui::app_context::AppContext;
 use crate::ui::downloads::remember_local_name;
 use crate::ui::state::{RestoreJob, RestoreResult, RestoreState};
-
-// pg_restore --verbose prints a line per table/index; keep memory bounded on huge dumps.
-const MAX_LOG_LINES: usize = 5_000;
 
 /// Everything "Refresh latest" needs, decided before the user confirms.
 #[derive(Clone, Debug, PartialEq)]
@@ -33,7 +31,7 @@ pub struct RefreshPlan {
     pub latest_dump: DumpFile,
     pub local_file_name: String,
     /// False when the latest dump is already on disk with the right size.
-    pub needs_download: bool,
+    pub should_download: bool,
     pub password: Option<String>,
 }
 
@@ -61,10 +59,10 @@ pub fn start_refresh(app: AppContext, plan: RefreshPlan) {
         dump_name: plan.local_file_name.clone(),
         target_name: plan.target.name.clone(),
         database: plan.target.database.clone(),
-        includes_download: true,
-        recreates_database: plan.target.recreate_database,
+        is_download_included: true,
+        restore_mode: plan.target.restore_mode,
     };
-    let first_phase = if plan.needs_download {
+    let first_phase = if plan.should_download {
         RestorePhase::Downloading
     } else {
         RestorePhase::CheckingDump
@@ -81,8 +79,8 @@ pub fn start_refresh(app: AppContext, plan: RefreshPlan) {
     );
 
     let task = spawn_forever(async move {
-        let destination = local_path_for(&plan.local_file_name);
-        if plan.needs_download {
+        let destination = app.settings.peek().download_path_for(&plan.local_file_name);
+        if plan.should_download {
             if let Err(error) = download_latest(app, &plan, destination.clone()).await {
                 finish_job(
                     app,
@@ -209,17 +207,17 @@ async fn run_restore_stage(
         &request,
         |process_group_id| set_process_group(app.restore, process_group_id),
         |line| {
-            if let Some(phase) = phase_started_by(&line) {
+            if let Some(phase) = detect_started_phase(&line) {
                 reached_phase = phase;
                 set_phase(app.restore, phase);
             }
-            ignored_errors = ignored_errors.or(ignored_error_count(&line));
+            ignored_errors = ignored_errors.or(parse_ignored_error_count(&line));
             append_log_line(app.restore_log, LogLine::from_output(line));
         },
     )
     .await;
 
-    let result = restore_result(outcome, ignored_errors);
+    let result = classify_restore_result(outcome, ignored_errors);
     finish_job(app, job, result, started_at, reached_phase);
 }
 
@@ -254,7 +252,10 @@ fn finish_job(
     reached_phase: RestorePhase,
 ) {
     let elapsed = started_at.elapsed();
-    append_log_line(app.restore_log, summary_log_line(&result, &job, elapsed));
+    append_log_line(
+        app.restore_log,
+        build_summary_log_line(&result, &job, elapsed),
+    );
     let mut restore = app.restore;
     restore.set(RestoreState::Finished {
         job,
@@ -302,7 +303,7 @@ fn set_task(mut restore: Signal<RestoreState>, running_task: Task) {
     }
 }
 
-fn restore_result(
+fn classify_restore_result(
     outcome: Result<RestoreExit, AppError>,
     ignored_error_count: Option<u32>,
 ) -> RestoreResult {
@@ -323,10 +324,10 @@ fn restore_result(
 }
 
 fn append_log_line(mut restore_log: Signal<RestoreLog>, line: LogLine) {
-    restore_log.write().push(line, MAX_LOG_LINES);
+    restore_log.write().push(line, MAX_KEPT_LOG_LINES);
 }
 
-fn summary_log_line(result: &RestoreResult, job: &RestoreJob, elapsed: Duration) -> LogLine {
+fn build_summary_log_line(result: &RestoreResult, job: &RestoreJob, elapsed: Duration) -> LogLine {
     let took = format_duration(elapsed);
     match result {
         RestoreResult::Succeeded => LogLine::note(
@@ -361,7 +362,7 @@ mod tests {
 
     #[test]
     fn exit_one_with_ignored_errors_is_partial_success() {
-        let result = restore_result(Ok(RestoreExit::Failed { exit_code: 1 }), Some(8));
+        let result = classify_restore_result(Ok(RestoreExit::Failed { exit_code: 1 }), Some(8));
         assert_eq!(
             result,
             RestoreResult::CompletedWithErrors {
@@ -372,10 +373,10 @@ mod tests {
 
     #[test]
     fn exit_one_without_summary_is_failure() {
-        let result = restore_result(Ok(RestoreExit::Failed { exit_code: 1 }), None);
+        let result = classify_restore_result(Ok(RestoreExit::Failed { exit_code: 1 }), None);
         assert!(matches!(result, RestoreResult::Failed(_)));
         assert_eq!(
-            restore_result(Ok(RestoreExit::Stopped), None),
+            classify_restore_result(Ok(RestoreExit::Stopped), None),
             RestoreResult::Cancelled
         );
     }

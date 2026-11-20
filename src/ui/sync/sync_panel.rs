@@ -6,14 +6,16 @@ use rfd::AsyncFileDialog;
 
 use crate::aws::download::DownloadProgress;
 use crate::clipboard::copy_to_clipboard;
+use crate::constants::{MAX_VISIBLE_LOG_LINES, PICKABLE_DUMP_EXTENSIONS};
 use crate::database::credentials::unlock_password;
 use crate::database::log_line::{LogLevel, LogLine};
 use crate::database::restore::{RestorePhase, RestoreRequest};
 use crate::database::target::DatabaseTarget;
 use crate::format::{
-    format_count, format_duration, format_relative_age, format_size, format_speed, now_epoch_secs,
+    format_count, format_duration, format_relative_age, format_size, format_speed,
+    read_current_epoch_secs,
 };
-use crate::local_files::{LocalDump, display_local_path, download_dir, list_local_dumps};
+use crate::local_files::{LocalDump, display_local_path, list_local_dumps};
 use crate::ui::app_context::{AppContext, use_app_context};
 use crate::ui::icons::{DatabaseIcon, RefreshIcon, ServerIcon};
 use crate::ui::modal::Modal;
@@ -22,12 +24,8 @@ use crate::ui::picker::{
     PickerFooter, PickerList, PickerMessage, PickerPopover, PickerRow, PickerTrigger,
 };
 use crate::ui::state::{RestoreJob, RestoreResult, RestoreState};
-use crate::ui::sync::data_loss_warning;
+use crate::ui::sync::describe_data_loss;
 use crate::ui::sync::restore_runner::{cancel_restore, start_restore};
-
-// The DOM only shows the tail of the log; the full (bounded) log stays in memory.
-const VISIBLE_LOG_LINES: usize = 1_000;
-const DUMP_FILE_EXTENSIONS: [&str; 2] = ["dump", "backup"];
 
 #[component]
 pub fn SyncPanel() -> Element {
@@ -39,7 +37,7 @@ pub fn SyncPanel() -> Element {
         .read()
         .as_deref()
         .and_then(LocalDump::from_path);
-    let selected_target = selected_target(app);
+    let selected_target = find_selected_target(app);
     let is_running = app.restore.read().is_running();
 
     let missing_choice_hint = match (&selected_dump, &selected_target) {
@@ -64,7 +62,7 @@ pub fn SyncPanel() -> Element {
                         span {
                             class: "sync-step-detail",
                             title: "{display_local_path(&dump.path)}",
-                            "{dump_summary(dump, now_epoch_secs())}"
+                            "{summarize_dump(dump, read_current_epoch_secs())}"
                         }
                     }
                 }
@@ -102,7 +100,7 @@ pub fn SyncPanel() -> Element {
     }
 }
 
-fn selected_target(app: AppContext) -> Option<DatabaseTarget> {
+fn find_selected_target(app: AppContext) -> Option<DatabaseTarget> {
     let selected_id = app.selected_target_id.read().clone()?;
     app.settings
         .read()
@@ -122,8 +120,8 @@ fn DumpPicker(selected_dump: Option<LocalDump>) -> Element {
         spawn(async move {
             let picked = AsyncFileDialog::new()
                 .set_title("Choose a PostgreSQL dump")
-                .add_filter("PostgreSQL dump", &DUMP_FILE_EXTENSIONS)
-                .set_directory(download_dir())
+                .add_filter("PostgreSQL dump", &PICKABLE_DUMP_EXTENSIONS)
+                .set_directory(app.settings.peek().download_folder())
                 .pick_file()
                 .await;
             if let Some(file) = picked {
@@ -165,12 +163,13 @@ fn DumpPicker(selected_dump: Option<LocalDump>) -> Element {
 
 #[component]
 fn LocalDumpOptions(selected_path: Option<String>, on_pick: EventHandler<LocalDump>) -> Element {
-    let dumps = list_local_dumps(&download_dir());
+    let download_folder = use_app_context().settings.read().download_folder();
+    let dumps = list_local_dumps(&download_folder);
     if dumps.is_empty() {
-        let folder = display_local_path(&download_dir());
+        let folder = display_local_path(&download_folder);
         return rsx! { PickerMessage { text: format!("No downloaded dumps in {folder} yet.") } };
     }
-    let now = now_epoch_secs();
+    let now = read_current_epoch_secs();
 
     rsx! {
         PickerList {
@@ -179,7 +178,7 @@ fn LocalDumpOptions(selected_path: Option<String>, on_pick: EventHandler<LocalDu
                     key: "{dump.path.display()}",
                     icon: rsx! { DatabaseIcon {} },
                     label: dump.file_name.clone(),
-                    trailing: dump_summary(&dump, now),
+                    trailing: summarize_dump(&dump, now),
                     is_selected: selected_path.as_deref() == Some(dump.path.display().to_string().as_str()),
                     on_pick: {
                         let dump = dump.clone();
@@ -191,7 +190,7 @@ fn LocalDumpOptions(selected_path: Option<String>, on_pick: EventHandler<LocalDu
     }
 }
 
-fn dump_summary(dump: &LocalDump, now_epoch_secs: i64) -> String {
+fn summarize_dump(dump: &LocalDump, now_epoch_secs: i64) -> String {
     let size = format_size(dump.size_bytes);
     match dump.modified_epoch_secs {
         Some(modified) => format!("{size} · {}", format_relative_age(modified, now_epoch_secs)),
@@ -284,8 +283,8 @@ fn ConfirmRestoreDialog(
                     dump_name: dump.file_name.clone(),
                     target_name: target.name.clone(),
                     database: target.database.clone(),
-                    includes_download: false,
-                    recreates_database: target.recreate_database,
+                    is_download_included: false,
+                    restore_mode: target.restore_mode,
                 };
                 start_restore(app, request, job);
                 on_close.call(());
@@ -302,7 +301,7 @@ fn ConfirmRestoreDialog(
                 strong { "{target.database}" }
                 " on {target.host}:{target.port}."
             }
-            div { class: "warning-box", "{data_loss_warning(&target)}" }
+            div { class: "warning-box", "{describe_data_loss(&target)}" }
             if !target.is_password_saved {
                 div { class: "form-field",
                     span { class: "field-label", "Password for {target.user}" }
@@ -358,7 +357,7 @@ fn RestoreStatus() -> Element {
             task,
         } => {
             let elapsed = started_at.elapsed();
-            let status_text = running_status_text(job, *phase, *download_progress, elapsed);
+            let status_text = format_running_status(job, *phase, *download_progress, elapsed);
             let can_cancel = process_group_id.is_some() || task.is_some();
             rsx! {
                 PhaseSteps {
@@ -512,7 +511,7 @@ fn RestoreLogView() -> Element {
         .iter()
         .filter(|line| active_filter.shows(line.level))
         .collect();
-    let first_visible = matching_lines.len().saturating_sub(VISIBLE_LOG_LINES);
+    let first_visible = matching_lines.len().saturating_sub(MAX_VISIBLE_LOG_LINES);
 
     let copy_log = move |_| {
         let full_log = app
@@ -549,7 +548,7 @@ fn RestoreLogView() -> Element {
                 for (offset, line) in matching_lines[first_visible..].iter().enumerate() {
                     div {
                         key: "{first_visible + offset}",
-                        class: "log-line {log_level_class(line.level)}",
+                        class: "log-line {pick_log_level_class(line.level)}",
                         "{line.text}"
                     }
                 }
@@ -589,7 +588,7 @@ fn LogFilterChip(
     }
 }
 
-fn log_level_class(level: LogLevel) -> &'static str {
+fn pick_log_level_class(level: LogLevel) -> &'static str {
     match level {
         LogLevel::Error => "error",
         LogLevel::Warning => "warning",
@@ -600,7 +599,7 @@ fn log_level_class(level: LogLevel) -> &'static str {
 
 /// `Download · 412.0 MB of 1.0 GB · 48.2 MB/s · 18s left · 0m 09s` while downloading,
 /// `Restore data · gen_x.dump → gen_db · 1m 05s` afterwards.
-fn running_status_text(
+fn format_running_status(
     job: &RestoreJob,
     phase: RestorePhase,
     download_progress: Option<DownloadProgress>,

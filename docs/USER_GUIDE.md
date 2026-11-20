@@ -41,7 +41,10 @@ The app has three tabs at the top: **↓ Download**, **⇄ Sync database** and *
    - **Authentication** - your database password. Turn on **Remember password in macOS Keychain** so you never type it again. Leave the password empty if it's in your `~/.pgpass` file.
      With a remembered password, **Ask for Touch ID before using it** (on by default) asks for your fingerprint each time the password is used - or your Mac password if Touch ID isn't available.
    - **Display** - an optional **Name** (defaults to the database name) and a **Dump prefix** (see below).
-   - **Restore** - **Start from an empty database** (on by default for new databases): the database is deleted and created again before each restore, so it becomes an *exact* copy of the dump. Your database user must own the database and be allowed to create databases.
+   - **Before restoring** - what happens to the data already there:
+     - **Drop the dump's schemas** (default) - every schema in the dump (e.g. `auth`, `core`) is dropped with CASCADE, then restored. You get an exact copy of those schemas; other schemas are kept. Your database user must own those schemas. If it can't drop one, nothing is changed.
+     - **Recreate the database** - the whole database is deleted and created again. Your user must own the database and be allowed to create databases.
+     - **Replace objects** - only `pg_restore --clean`. Leftover local objects can cause errors and a mix of old and new data, so use it only if the other two aren't possible.
    - **One-click refresh** - where this database's newest dump lives. Click **Use current S3 source** to copy what's selected on the Download tab, or fill in **AWS profile**, **Bucket**, **Folder** and optionally **Name contains**.
 3. Click **Test connection**. You should see *✓ Connected in … ms*.
 4. Click **Add database**.
@@ -102,7 +105,7 @@ Click **↓ Download** on a dump. A dialog opens:
 
 Click **Download**. The **Downloads** panel at the bottom shows progress, speed and time left. You can **Cancel**, **Retry**, **Show in Finder**, or go straight to restoring with **⇄ Sync to database…**.
 
-Files are saved in `~/Downloads/db-refresh-dumps/`.
+Files are saved in your **Downloads** folder by default. To use another folder, click **Change…** next to the folder in the **Downloads** panel or in the download dialog; **Use Downloads** switches back.
 
 ---
 
@@ -116,7 +119,7 @@ Use this when you want an older dump, or one from somewhere else on your Mac.
 
 Shortcut: **⇄ Sync…** on a downloaded dump in the Backups list opens this screen with the file already selected.
 
-> **Important:** restoring **replaces** the database. With **Start from an empty database** the whole database is deleted and created again; otherwise existing tables are dropped and recreated (`pg_restore --clean`). Either way, anything you changed in that database is lost.
+> **Important:** restoring **replaces** data. Depending on the database's **Before restoring** setting, the dump's schemas are dropped, the whole database is recreated, or each object is replaced. Anything you changed there is lost.
 
 ### Reading the result
 
@@ -141,7 +144,7 @@ Shortcut: **⇄ Sync…** on a downloaded dump in the Backups list opens this sc
 |---|---|
 | Bucket, folder, databases (no passwords) | `~/Library/Application Support/db-refresh/settings.json` |
 | Database passwords | macOS **Keychain** (encrypted), under `dev.dbrefresh.app` |
-| Downloaded dumps | `~/Downloads/db-refresh-dumps/` |
+| Downloaded dumps | `~/Downloads` by default, or the folder you chose with **Change…** |
 
 Nothing is sent anywhere except to your S3 bucket (to list and download) and your database (to restore). Passwords are only given to the PostgreSQL tools while they run.
 
@@ -177,10 +180,13 @@ You dismissed the fingerprint prompt. Sync again and confirm with Touch ID, or t
 See *Install* above: **Open Anyway** in Privacy & Security, or the `xattr` command.
 
 **"cannot drop schema … because other objects depend on it" and "schema … already exists"**
-Your local database contains objects that are not in the dump (for example tables from local work), so those schemas could not be replaced. The data from the dump is restored, but the leftovers remain. Edit the database, turn on **Start from an empty database**, and sync again for an exact copy.
+Your local database contains objects that are not in the dump (for example tables from local work), and the database is set to **Replace objects**. Leftovers can block the restore and leave old and new rows mixed. Edit the database, choose **Drop the dump's schemas** under **Before restoring**, and sync again.
+
+**"Could not drop the schemas, so nothing was changed"**
+**Drop the dump's schemas** needs your database user to own those schemas. Ask your database admin to run `ALTER SCHEMA <name> OWNER TO <your user>;` for each, or choose another mode. Nothing was dropped.
 
 **"… may not create databases, so … was left untouched"**
-**Start from an empty database** needs permission to create databases. Ask your database admin to run `ALTER ROLE <your user> CREATEDB;` - or turn the option off. Nothing was deleted.
+**Recreate the database** needs permission to create databases. Ask your database admin to run `ALTER ROLE <your user> CREATEDB;` - or choose **Drop the dump's schemas**. Nothing was deleted.
 
 **The restore finished "with N errors"**
 Click **Errors** in the log. Messages about extensions, owners or roles are usually safe to ignore. If tables you need are missing, share the copied log with your team.
@@ -193,7 +199,7 @@ Click **Errors** in the log. Messages about extensions, owners or roles are usua
 Yes. Add one database per project, each with its own one-click source (bucket and folder).
 
 **How do I free up disk space?**
-Delete old files in `~/Downloads/db-refresh-dumps/` (use **Show in Finder**).
+Delete old `.dump` files from your download folder (use **Show in Finder**).
 
 **How do I uninstall?**
-Drag **DB Refresh** from Applications to the Trash. To remove its data too, delete `~/Library/Application Support/db-refresh/`, `~/Downloads/db-refresh-dumps/`, and the `dev.dbrefresh.app` items in Keychain Access.
+Drag **DB Refresh** from Applications to the Trash. To remove its data too, delete `~/Library/Application Support/db-refresh/`, the downloaded `.dump` files, and the `dev.dbrefresh.app` items in Keychain Access.

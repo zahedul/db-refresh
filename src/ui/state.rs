@@ -5,6 +5,7 @@ use dioxus::core::Task;
 use crate::aws::download::{DownloadProgress, DownloadRequest};
 use crate::aws::s3::SearchResult;
 use crate::database::restore::RestorePhase;
+use crate::database::target::RestoreMode;
 use crate::error::AppError;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -54,17 +55,18 @@ pub struct RestoreJob {
     pub target_name: String,
     pub database: String,
     /// "Refresh latest" downloads first; a manual sync starts at the restore script.
-    pub includes_download: bool,
-    /// The database is dropped and created before restoring.
-    pub recreates_database: bool,
+    pub is_download_included: bool,
+    /// How existing data is cleared before restoring.
+    pub restore_mode: RestoreMode,
 }
 
 impl RestoreJob {
-    /// Download and Recreate database are optional stages; the rest always run.
+    /// Download, Drop schemas and Recreate database depend on the job; the rest always run.
     pub fn includes_phase(&self, phase: RestorePhase) -> bool {
         match phase {
-            RestorePhase::Downloading => self.includes_download,
-            RestorePhase::RecreatingDatabase => self.recreates_database,
+            RestorePhase::Downloading => self.is_download_included,
+            RestorePhase::DroppingSchemas => self.restore_mode == RestoreMode::DropSchemas,
+            RestorePhase::RecreatingDatabase => self.restore_mode == RestoreMode::RecreateDatabase,
             RestorePhase::CheckingDump | RestorePhase::Connecting | RestorePhase::RestoringData => {
                 true
             }
@@ -116,13 +118,13 @@ impl RestoreState {
 mod tests {
     use super::*;
 
-    fn job(includes_download: bool, recreates_database: bool) -> RestoreJob {
+    fn job(is_download_included: bool, restore_mode: RestoreMode) -> RestoreJob {
         RestoreJob {
             dump_name: "gen.dump".to_string(),
             target_name: "General".to_string(),
             database: "gen_db".to_string(),
-            includes_download,
-            recreates_database,
+            is_download_included,
+            restore_mode,
         }
     }
 
@@ -134,9 +136,12 @@ mod tests {
                 .filter(|phase| job.includes_phase(*phase))
                 .count()
         };
-        assert_eq!(shown(&job(false, false)), 3);
-        assert_eq!(shown(&job(true, false)), 4);
-        assert_eq!(shown(&job(true, true)), 5);
-        assert!(!job(true, false).includes_phase(RestorePhase::RecreatingDatabase));
+        assert_eq!(shown(&job(false, RestoreMode::ReplaceObjects)), 3);
+        assert_eq!(shown(&job(true, RestoreMode::ReplaceObjects)), 4);
+        assert_eq!(shown(&job(true, RestoreMode::DropSchemas)), 5);
+        assert_eq!(shown(&job(false, RestoreMode::RecreateDatabase)), 4);
+        let dropping = job(false, RestoreMode::DropSchemas);
+        assert!(dropping.includes_phase(RestorePhase::DroppingSchemas));
+        assert!(!dropping.includes_phase(RestorePhase::RecreatingDatabase));
     }
 }

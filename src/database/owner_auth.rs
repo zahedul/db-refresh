@@ -9,14 +9,8 @@ use objc2_foundation::{NSError, NSString};
 use objc2_local_authentication::{LAContext, LAError, LAPolicy};
 use tokio::sync::oneshot;
 
+use crate::constants::TOUCH_ID_CANCELLATION_CODES;
 use crate::error::AppError;
-
-/// LocalAuthentication codes meaning "the user (or system) dismissed the prompt".
-const CANCELLATION_CODES: [LAError; 3] = [
-    LAError::UserCancel,
-    LAError::SystemCancel,
-    LAError::AppCancel,
-];
 
 /// Shows the system Touch ID prompt: "DB Refresh is trying to <reason>."
 pub async fn confirm_device_owner(reason: &str) -> Result<(), AppError> {
@@ -28,7 +22,7 @@ pub async fn confirm_device_owner(reason: &str) -> Result<(), AppError> {
         let outcome = if is_success.as_bool() {
             Ok(())
         } else {
-            Err(authentication_error(error))
+            Err(to_authentication_error(error))
         };
         if let Some(sender) = result_sender.lock().ok().and_then(|mut slot| slot.take()) {
             let _ = sender.send(outcome);
@@ -54,13 +48,13 @@ pub async fn confirm_device_owner(reason: &str) -> Result<(), AppError> {
     })
 }
 
-fn authentication_error(error: *mut NSError) -> AppError {
+fn to_authentication_error(error: *mut NSError) -> AppError {
     // SAFETY: LocalAuthentication passes either null or an NSError that is valid for
     // the duration of the reply call, which is where this runs.
     let Some(error) = (unsafe { error.as_ref() }) else {
         return AppError::Authentication("Authentication failed.".to_string());
     };
-    if CANCELLATION_CODES.contains(&LAError(error.code())) {
+    if TOUCH_ID_CANCELLATION_CODES.contains(&LAError(error.code())) {
         return AppError::AuthenticationCancelled;
     }
     AppError::Authentication(error.localizedDescription().to_string())

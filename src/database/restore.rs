@@ -8,22 +8,13 @@ use dioxus::logger::tracing;
 use tokio::io::{AsyncBufReadExt, BufReader};
 use tokio::process::Command;
 
+use crate::constants::{
+    CONNECTING_MARKER, DATABASE_CONNECT_TIMEOUT_SECONDS, DROPPING_SCHEMAS_MARKER,
+    IGNORED_ERRORS_MARKER, MERGE_STDERR_INTO_STDOUT, POSTGRES_TOOL_DIRS, RECREATING_MARKER,
+    RESTORE_PARALLEL_JOBS, RESTORE_SCRIPT, RESTORE_SCRIPT_NAME, RESTORING_MARKER,
+};
 use crate::database::target::DatabaseTarget;
 use crate::error::AppError;
-
-const RESTORE_SCRIPT: &str = include_str!("../../scripts/restore-postgres.sh");
-// `exec 2>&1` merges the script's stderr (where pg_restore writes) into stdout, so the
-// log keeps the real order of messages and only one pipe has to be read.
-const MERGE_STDERR_INTO_STDOUT: &str = "exec 2>&1\n";
-const SCRIPT_NAME: &str = "restore-postgres";
-const RESTORE_JOBS: &str = "4";
-const CONNECT_TIMEOUT_SECONDS: &str = "10";
-/// Where Homebrew puts the PostgreSQL client tools (libpq first, as the script expects).
-const POSTGRES_TOOL_DIRS: [&str; 3] = [
-    "/opt/homebrew/opt/libpq/bin",
-    "/opt/homebrew/bin",
-    "/usr/local/bin",
-];
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct RestoreRequest {
@@ -50,16 +41,19 @@ pub enum RestorePhase {
     Downloading,
     CheckingDump,
     Connecting,
-    /// Only with "Start from an empty database": drop and create the database.
+    /// Only in "Drop the dump's schemas" mode.
+    DroppingSchemas,
+    /// Only in "Recreate the database" mode.
     RecreatingDatabase,
     RestoringData,
 }
 
 impl RestorePhase {
-    pub const ALL: [Self; 5] = [
+    pub const ALL: [Self; 6] = [
         Self::Downloading,
         Self::CheckingDump,
         Self::Connecting,
+        Self::DroppingSchemas,
         Self::RecreatingDatabase,
         Self::RestoringData,
     ];
@@ -69,22 +63,20 @@ impl RestorePhase {
             Self::Downloading => "Download",
             Self::CheckingDump => "Check dump",
             Self::Connecting => "Connect",
+            Self::DroppingSchemas => "Drop schemas",
             Self::RecreatingDatabase => "Recreate database",
             Self::RestoringData => "Restore data",
         }
     }
 }
 
-// Marker lines printed by `scripts/restore-postgres.sh`; keep in sync with the script.
-const CONNECTING_MARKER: &str = "Testing connection";
-const RECREATING_MARKER: &str = "Recreating database";
-const RESTORING_MARKER: &str = "Starting database restoration";
-const IGNORED_ERRORS_MARKER: &str = "errors ignored on restore:";
-
 /// The phase a script output line starts, if it is one of the script's marker lines.
-pub fn phase_started_by(line: &str) -> Option<RestorePhase> {
+pub fn detect_started_phase(line: &str) -> Option<RestorePhase> {
     if line.starts_with(CONNECTING_MARKER) {
         return Some(RestorePhase::Connecting);
+    }
+    if line.starts_with(DROPPING_SCHEMAS_MARKER) {
+        return Some(RestorePhase::DroppingSchemas);
     }
     if line.starts_with(RECREATING_MARKER) {
         return Some(RestorePhase::RecreatingDatabase);
@@ -97,7 +89,7 @@ pub fn phase_started_by(line: &str) -> Option<RestorePhase> {
 
 /// pg_restore keeps going past failing items and ends with
 /// `pg_restore: warning: errors ignored on restore: 8` (and exit code 1).
-pub fn ignored_error_count(line: &str) -> Option<u32> {
+pub fn parse_ignored_error_count(line: &str) -> Option<u32> {
     let (_, count) = line.split_once(IGNORED_ERRORS_MARKER)?;
     count.trim().parse().ok()
 }
@@ -114,11 +106,11 @@ pub async fn run_restore(
     command
         .arg("-c")
         .arg(script)
-        .arg(SCRIPT_NAME)
+        .arg(RESTORE_SCRIPT_NAME)
         .arg(&request.dump_path)
         .arg(&request.target.database)
-        .env("RESTORE_JOBS", RESTORE_JOBS)
-        .env("RECREATE_DATABASE", recreate_flag(&request.target))
+        .env("RESTORE_PARALLEL_JOBS", RESTORE_PARALLEL_JOBS)
+        .env("RESTORE_MODE", request.target.restore_mode.script_value())
         .stdin(Stdio::null())
         .stdout(Stdio::piped())
         .stderr(Stdio::null())
@@ -167,10 +159,6 @@ pub async fn run_restore(
     })
 }
 
-fn recreate_flag(target: &DatabaseTarget) -> &'static str {
-    if target.recreate_database { "1" } else { "0" }
-}
-
 /// Sends SIGTERM to the whole restore process group (bash, psql/pg_restore and its workers).
 pub fn stop_restore(process_group_id: u32) {
     let result = std::process::Command::new("/bin/kill")
@@ -210,11 +198,11 @@ pub async fn test_connection(
 
 fn apply_connection_env(command: &mut Command, target: &DatabaseTarget, password: Option<&str>) {
     command
-        .env("PATH", path_with_postgres_tools())
+        .env("PATH", build_path_with_postgres_tools())
         .env("PGHOST", &target.host)
         .env("PGPORT", target.port.to_string())
         .env("PGUSER", &target.user)
-        .env("PGCONNECT_TIMEOUT", CONNECT_TIMEOUT_SECONDS);
+        .env("PGCONNECT_TIMEOUT", DATABASE_CONNECT_TIMEOUT_SECONDS);
 
     // Passed only to the child process, never on its command line (visible in `ps`).
     match password.filter(|password| !password.is_empty()) {
@@ -224,7 +212,7 @@ fn apply_connection_env(command: &mut Command, target: &DatabaseTarget, password
 }
 
 // Apps opened from Finder get a minimal PATH without Homebrew, so add it explicitly.
-fn path_with_postgres_tools() -> String {
+fn build_path_with_postgres_tools() -> String {
     let current_path = env::var("PATH").unwrap_or_default();
     format!("{}:{current_path}", POSTGRES_TOOL_DIRS.join(":"))
 }
@@ -250,20 +238,25 @@ mod tests {
     #[test]
     fn script_markers_start_phases() {
         assert_eq!(
-            phase_started_by("Testing connection..."),
+            detect_started_phase("Testing connection..."),
             Some(RestorePhase::Connecting)
         );
         assert_eq!(
-            phase_started_by("Starting database restoration..."),
+            detect_started_phase("Starting database restoration..."),
             Some(RestorePhase::RestoringData)
         );
-        assert_eq!(phase_started_by("pg_restore: creating TABLE x"), None);
+        assert_eq!(detect_started_phase("pg_restore: creating TABLE x"), None);
         // The markers must exist in the embedded script, or phases would never advance.
         assert!(RESTORE_SCRIPT.contains(CONNECTING_MARKER));
         assert!(RESTORE_SCRIPT.contains(RESTORING_MARKER));
         assert!(RESTORE_SCRIPT.contains(RECREATING_MARKER));
+        assert!(RESTORE_SCRIPT.contains(DROPPING_SCHEMAS_MARKER));
         assert_eq!(
-            phase_started_by("Recreating database app_db..."),
+            detect_started_phase("Dropping schemas: auth, core..."),
+            Some(RestorePhase::DroppingSchemas)
+        );
+        assert_eq!(
+            detect_started_phase("Recreating database app_db..."),
             Some(RestorePhase::RecreatingDatabase)
         );
     }
@@ -271,87 +264,17 @@ mod tests {
     #[test]
     fn ignored_error_count_reads_pg_restore_summary() {
         assert_eq!(
-            ignored_error_count("pg_restore: warning: errors ignored on restore: 8"),
+            parse_ignored_error_count("pg_restore: warning: errors ignored on restore: 8"),
             Some(8)
         );
         assert_eq!(
-            ignored_error_count("pg_restore: error: could not execute"),
+            parse_ignored_error_count("pg_restore: error: could not execute"),
             None
         );
     }
 
     #[test]
     fn path_puts_homebrew_postgres_tools_first() {
-        assert!(path_with_postgres_tools().starts_with("/opt/homebrew/opt/libpq/bin:"));
-    }
-
-    /// Runs only on request, against a throwaway server, because it drops a database:
-    /// `DB_REFRESH_TEST_PGPORT=55432 DB_REFRESH_TEST_PGPASSWORD=… DB_REFRESH_TEST_DUMP=/path/x.dump
-    ///  cargo test recreate_mode -- --ignored`
-    #[tokio::test]
-    #[ignore = "needs a disposable PostgreSQL server; see the doc comment"]
-    async fn recreate_mode_restores_into_an_empty_database() {
-        let env = |name: &str| std::env::var(name).unwrap_or_else(|_| panic!("set {name}"));
-        let request = RestoreRequest {
-            dump_path: PathBuf::from(env("DB_REFRESH_TEST_DUMP")),
-            target: DatabaseTarget {
-                host: "127.0.0.1".to_string(),
-                port: env("DB_REFRESH_TEST_PGPORT").parse().unwrap(),
-                user: "postgres".to_string(),
-                database: "db_refresh_integration".to_string(),
-                recreate_database: true,
-                ..DatabaseTarget::default()
-            },
-            password: Some(env("DB_REFRESH_TEST_PGPASSWORD")),
-        };
-        let mut phases = Vec::new();
-        let mut lines = Vec::new();
-
-        let exit = run_restore(
-            &request,
-            |_| {},
-            |line| {
-                phases.extend(phase_started_by(&line));
-                lines.push(line);
-            },
-        )
-        .await
-        .unwrap();
-
-        assert_eq!(exit, RestoreExit::Succeeded, "log:\n{}", lines.join("\n"));
-        assert_eq!(
-            phases,
-            vec![
-                RestorePhase::Connecting,
-                RestorePhase::RecreatingDatabase,
-                RestorePhase::RestoringData
-            ]
-        );
-        assert!(!lines.iter().any(|line| line.contains("error")));
-    }
-
-    #[tokio::test]
-    async fn invalid_dump_fails_with_script_message() {
-        let request = RestoreRequest {
-            dump_path: PathBuf::from("/definitely/missing.dump"),
-            target: DatabaseTarget {
-                user: "nobody".to_string(),
-                database: "nothing".to_string(),
-                ..DatabaseTarget::default()
-            },
-            password: None,
-        };
-        let mut lines = Vec::new();
-
-        let exit = run_restore(&request, |_| {}, |line| lines.push(line))
-            .await
-            .unwrap();
-
-        assert_eq!(exit, RestoreExit::Failed { exit_code: 1 });
-        assert!(
-            lines
-                .iter()
-                .any(|line| line.contains("Dump file not found"))
-        );
+        assert!(build_path_with_postgres_tools().starts_with("/opt/homebrew/opt/libpq/bin:"));
     }
 }

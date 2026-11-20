@@ -2,11 +2,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::{Deserialize, Serialize};
 
-use crate::dump_name::dump_group;
+use crate::constants::{DEFAULT_DATABASE_HOST, DEFAULT_DATABASE_PORT};
+use crate::dump_name::extract_dump_group;
 use crate::error::AppError;
-
-const DEFAULT_HOST: &str = "localhost";
-const DEFAULT_PORT: u16 = 5432;
 
 /// A PostgreSQL database that dumps can be restored into. The password is never
 /// stored here; it lives in the macOS Keychain under `id` (see `credentials`).
@@ -23,12 +21,68 @@ pub struct DatabaseTarget {
     pub dump_group: String,
     pub is_password_saved: bool,
     /// Ask for Touch ID (or the Mac password) before the saved password is used.
-    pub require_touch_id: bool,
-    /// Drop and create the database before each restore, so it becomes an exact copy
-    /// of the dump (objects that exist only locally are removed too).
-    pub recreate_database: bool,
+    #[serde(rename = "require_touch_id")]
+    pub should_require_touch_id: bool,
+    /// What happens to existing data before the dump is restored.
+    pub restore_mode: RestoreMode,
     /// Where "Refresh latest" looks for this database's newest dump.
     pub dump_source: DumpSource,
+}
+
+/// How a restore treats the data already in the database.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum RestoreMode {
+    /// pg_restore --clean replaces each object in the dump. Objects that exist only
+    /// locally can block it and leave a mix of old and new data.
+    ReplaceObjects,
+    /// DROP SCHEMA ... CASCADE for the dump's schemas (one transaction), then restore.
+    /// The default: an exact copy of those schemas without needing CREATEDB.
+    #[default]
+    DropSchemas,
+    /// Drop and create the whole database, then restore. Needs CREATEDB.
+    RecreateDatabase,
+}
+
+impl RestoreMode {
+    pub const ALL: [Self; 3] = [
+        Self::DropSchemas,
+        Self::RecreateDatabase,
+        Self::ReplaceObjects,
+    ];
+
+    /// The `RESTORE_MODE` value understood by `scripts/restore-postgres.sh`.
+    pub fn script_value(self) -> &'static str {
+        match self {
+            Self::ReplaceObjects => "clean",
+            Self::DropSchemas => "drop-schemas",
+            Self::RecreateDatabase => "recreate",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::ReplaceObjects => "Replace objects",
+            Self::DropSchemas => "Drop the dump's schemas",
+            Self::RecreateDatabase => "Recreate the database",
+        }
+    }
+
+    pub fn description(self) -> &'static str {
+        match self {
+            Self::DropSchemas => {
+                "Recommended. Drops every schema in the dump (auth, core, …) with CASCADE, then restores. \
+                 Exact copy of those schemas; other schemas are kept. The user must own the schemas."
+            }
+            Self::RecreateDatabase => {
+                "Deletes and recreates the whole database. Exact copy of the dump. \
+                 The user must own the database and may create databases."
+            }
+            Self::ReplaceObjects => {
+                "pg_restore --clean only. Leftover local objects can cause errors and mixed old and new data."
+            }
+        }
+    }
 }
 
 /// An S3 location holding a database's dumps, for one-click "Refresh latest".
@@ -57,27 +111,24 @@ impl Default for DatabaseTarget {
         Self {
             id: String::new(),
             name: String::new(),
-            host: DEFAULT_HOST.to_string(),
-            port: DEFAULT_PORT,
+            host: DEFAULT_DATABASE_HOST.to_string(),
+            port: DEFAULT_DATABASE_PORT,
             user: String::new(),
             database: String::new(),
             dump_group: String::new(),
             is_password_saved: false,
             // Also the value for targets saved before this option existed (serde default).
-            require_touch_id: true,
-            recreate_database: false,
+            should_require_touch_id: true,
+            restore_mode: RestoreMode::default(),
             dump_source: DumpSource::default(),
         }
     }
 }
 
 impl DatabaseTarget {
-    /// New targets start from an empty database by default: it is the only way to get
-    /// an exact copy. Targets saved before this option existed keep the old behaviour.
     pub fn new_draft() -> Self {
         Self {
-            id: new_target_id(),
-            recreate_database: true,
+            id: generate_target_id(),
             ..Self::default()
         }
     }
@@ -128,18 +179,18 @@ pub fn upsert_target(targets: &mut Vec<DatabaseTarget>, target: DatabaseTarget) 
     }
 }
 
-/// The target whose `dump_group` matches the dump's file-name prefix, if any.
+/// The target whose `extract_dump_group` matches the dump's file-name prefix, if any.
 pub fn suggest_target<'a>(
     targets: &'a [DatabaseTarget],
     dump_file_name: &str,
 ) -> Option<&'a DatabaseTarget> {
-    let group = dump_group(dump_file_name)?;
+    let group = extract_dump_group(dump_file_name)?;
     targets.iter().find(|target| {
         !target.dump_group.is_empty() && target.dump_group.eq_ignore_ascii_case(group)
     })
 }
 
-fn new_target_id() -> String {
+fn generate_target_id() -> String {
     let nanos = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .map(|since_epoch| since_epoch.as_nanos())
@@ -221,6 +272,17 @@ mod tests {
         source.folder_prefix = "prod/".to_string();
         assert!(source.is_configured());
         assert_eq!(source.s3_location(), "s3://my-backups/prod/");
+    }
+
+    #[test]
+    fn restore_mode_is_saved_by_name() {
+        let target = DatabaseTarget {
+            restore_mode: RestoreMode::RecreateDatabase,
+            ..DatabaseTarget::default()
+        };
+        let json = serde_json::to_string(&target).unwrap();
+        assert!(json.contains(r#""restore_mode":"recreate-database""#));
+        assert_eq!(RestoreMode::DropSchemas.script_value(), "drop-schemas");
     }
 
     #[test]

@@ -1,7 +1,5 @@
+use crate::constants::{ICON_SIZE, ICON_VIEW_BOX};
 use dioxus::prelude::*;
-
-const ICON_SIZE: &str = "16";
-const ICON_VIEW_BOX: &str = "0 0 20 20";
 
 #[component]
 pub fn FolderIcon() -> Element {

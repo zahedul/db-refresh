@@ -16,22 +16,12 @@ use aws_sdk_s3::operation::head_object::HeadObjectError;
 use futures_util::{StreamExt, stream};
 
 use crate::aws::s3::build_client;
+use crate::constants::{
+    DOWNLOAD_PART_SIZE_BYTES, DOWNLOAD_PROGRESS_INTERVAL, DOWNLOAD_WRITE_BATCH_BYTES,
+    HTTP_FORBIDDEN, HTTP_PRECONDITION_FAILED, MAX_PARALLEL_DOWNLOAD_PARTS, MAX_PART_ATTEMPTS,
+    PART_RETRY_BASE_DELAY, PARTIAL_FILE_SUFFIX,
+};
 use crate::error::AppError;
-
-/// 8 MiB parts × 8 at a time: a 1 GB dump is 128 parts with 8 requests in flight.
-/// Several connections fill the bandwidth far better than one long stream.
-const PART_SIZE_BYTES: u64 = 8 * 1024 * 1024;
-const MAX_PARALLEL_PARTS: usize = 8;
-/// A failed part (e.g. a dropped connection) is retried alone, not the whole file.
-const MAX_PART_ATTEMPTS: u32 = 3;
-const PART_RETRY_BASE_DELAY: Duration = Duration::from_millis(500);
-/// Received data is written in batches to keep disk writes few and large.
-const WRITE_BATCH_BYTES: usize = 1024 * 1024;
-// Progress callbacks drive UI redraws; a few per second is smooth without wasting CPU.
-const PROGRESS_INTERVAL: Duration = Duration::from_millis(200);
-const PARTIAL_FILE_SUFFIX: &str = ".part";
-const HTTP_FORBIDDEN: u16 = 403;
-const HTTP_PRECONDITION_FAILED: u16 = 412;
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct DownloadRequest {
@@ -150,18 +140,21 @@ pub async fn download_dump_file(
     Ok(())
 }
 
-/// Runs up to `MAX_PARALLEL_PARTS` part downloads at a time, reporting progress on a timer.
+/// Runs up to `MAX_PARALLEL_DOWNLOAD_PARTS` part downloads at a time, reporting progress on a timer.
 async fn download_all_parts(
     part_target: PartTarget<'_>,
     total_bytes: u64,
     on_progress: &mut impl FnMut(DownloadProgress),
 ) -> Result<(), AppError> {
     let mut parts = pin!(
-        stream::iter(part_ranges(total_bytes, PART_SIZE_BYTES))
-            .map(|range| part_target.download_with_retries(range))
-            .buffer_unordered(MAX_PARALLEL_PARTS)
+        stream::iter(split_into_part_ranges(
+            total_bytes,
+            DOWNLOAD_PART_SIZE_BYTES
+        ))
+        .map(|range| part_target.download_with_retries(range))
+        .buffer_unordered(MAX_PARALLEL_DOWNLOAD_PARTS)
     );
-    let mut progress_ticker = tokio::time::interval(PROGRESS_INTERVAL);
+    let mut progress_ticker = tokio::time::interval(DOWNLOAD_PROGRESS_INTERVAL);
     loop {
         tokio::select! {
             finished_part = parts.next() => match finished_part {
@@ -177,7 +170,7 @@ async fn download_all_parts(
 }
 
 /// Splits `total_bytes` into consecutive ranges of at most `part_size` bytes.
-fn part_ranges(total_bytes: u64, part_size: u64) -> Vec<ByteRange> {
+fn split_into_part_ranges(total_bytes: u64, part_size: u64) -> Vec<ByteRange> {
     (0..total_bytes)
         .step_by(part_size as usize)
         .map(|start| ByteRange {
@@ -257,7 +250,7 @@ impl PartTarget<'_> {
             .map_err(|error| to_download_error(error, self.request))?;
 
         let mut write_offset = range.start;
-        let mut batch = Vec::with_capacity(WRITE_BATCH_BYTES);
+        let mut batch = Vec::with_capacity(DOWNLOAD_WRITE_BATCH_BYTES);
         while let Some(chunk) = response
             .body
             .try_next()
@@ -268,7 +261,7 @@ impl PartTarget<'_> {
             *received_this_attempt += chunk.len() as u64;
             self.received_bytes
                 .set(self.received_bytes.get() + chunk.len() as u64);
-            if batch.len() >= WRITE_BATCH_BYTES {
+            if batch.len() >= DOWNLOAD_WRITE_BATCH_BYTES {
                 write_offset = self.file.write_batch(write_offset, &mut batch).await?;
             }
         }
@@ -300,13 +293,13 @@ struct PartialFile {
 impl PartialFile {
     fn create(destination: &Path, size_bytes: u64) -> Result<Self, AppError> {
         if let Some(parent) = destination.parent() {
-            fs::create_dir_all(parent).map_err(|error| file_system_error(parent, &error))?;
+            fs::create_dir_all(parent).map_err(|error| to_file_system_error(parent, &error))?;
         }
-        let path = partial_path_for(destination);
-        let file = File::create(&path).map_err(|error| file_system_error(&path, &error))?;
+        let path = build_partial_path(destination);
+        let file = File::create(&path).map_err(|error| to_file_system_error(&path, &error))?;
         // Reserve the full size up front so parts can be written in any order.
         file.set_len(size_bytes)
-            .map_err(|error| file_system_error(&path, &error))?;
+            .map_err(|error| to_file_system_error(&path, &error))?;
 
         Ok(Self {
             path,
@@ -320,7 +313,7 @@ impl PartialFile {
         if batch.is_empty() {
             return Ok(offset);
         }
-        let data = std::mem::replace(batch, Vec::with_capacity(WRITE_BATCH_BYTES));
+        let data = std::mem::replace(batch, Vec::with_capacity(DOWNLOAD_WRITE_BATCH_BYTES));
         let next_offset = offset + data.len() as u64;
         let file = Arc::clone(&self.file);
         let write_result = tokio::task::spawn_blocking(move || file.write_all_at(&data, offset))
@@ -328,13 +321,13 @@ impl PartialFile {
             .map_err(|join_error| {
                 AppError::Download(format!("Disk write stopped: {join_error}"))
             })?;
-        write_result.map_err(|error| file_system_error(&self.path, &error))?;
+        write_result.map_err(|error| to_file_system_error(&self.path, &error))?;
         Ok(next_offset)
     }
 
     fn finish(mut self, destination: &Path) -> Result<(), AppError> {
         fs::rename(&self.path, destination)
-            .map_err(|error| file_system_error(destination, &error))?;
+            .map_err(|error| to_file_system_error(destination, &error))?;
         self.is_finished = true;
         Ok(())
     }
@@ -351,20 +344,20 @@ impl Drop for PartialFile {
     }
 }
 
-fn partial_path_for(destination: &Path) -> PathBuf {
+fn build_partial_path(destination: &Path) -> PathBuf {
     let mut partial_name = destination.as_os_str().to_owned();
     partial_name.push(PARTIAL_FILE_SUFFIX);
     PathBuf::from(partial_name)
 }
 
-fn file_system_error(path: &Path, error: &std::io::Error) -> AppError {
+fn to_file_system_error(path: &Path, error: &std::io::Error) -> AppError {
     AppError::FileSystem {
         path: path.display().to_string(),
         detail: error.to_string(),
     }
 }
 
-fn http_status<E>(error: &SdkError<E, HttpResponse>) -> Option<u16> {
+fn read_http_status<E>(error: &SdkError<E, HttpResponse>) -> Option<u16> {
     error
         .raw_response()
         .map(|response| response.status().as_u16())
@@ -380,7 +373,7 @@ fn to_head_error(
         };
     }
     // HEAD responses have no body, so access errors only show as the HTTP status.
-    if http_status(&error) == Some(HTTP_FORBIDDEN) {
+    if read_http_status(&error) == Some(HTTP_FORBIDDEN) {
         return AppError::AccessDenied {
             profile: request.profile.clone(),
             bucket: request.bucket.clone(),
@@ -399,7 +392,7 @@ fn to_download_error(
         };
     }
     if error.code() == Some("PreconditionFailed")
-        || http_status(&error) == Some(HTTP_PRECONDITION_FAILED)
+        || read_http_status(&error) == Some(HTTP_PRECONDITION_FAILED)
     {
         return AppError::ObjectChanged {
             key: request.key.clone(),
@@ -443,7 +436,7 @@ mod tests {
 
     #[test]
     fn part_ranges_cover_every_byte_exactly_once() {
-        let ranges = part_ranges(25, 10);
+        let ranges = split_into_part_ranges(25, 10);
         assert_eq!(
             ranges,
             vec![
@@ -467,20 +460,23 @@ mod tests {
 
     #[test]
     fn part_ranges_handle_exact_multiples_and_empty_files() {
-        assert_eq!(part_ranges(20, 10).len(), 2);
+        assert_eq!(split_into_part_ranges(20, 10).len(), 2);
         assert_eq!(
-            part_ranges(1, 10),
+            split_into_part_ranges(1, 10),
             vec![ByteRange {
                 start: 0,
                 end_inclusive: 0
             }]
         );
-        assert!(part_ranges(0, 10).is_empty());
+        assert!(split_into_part_ranges(0, 10).is_empty());
     }
 
     #[test]
     fn a_one_gigabyte_dump_is_split_into_128_parts() {
-        assert_eq!(part_ranges(1024 * 1024 * 1024, PART_SIZE_BYTES).len(), 128);
+        assert_eq!(
+            split_into_part_ranges(1024 * 1024 * 1024, DOWNLOAD_PART_SIZE_BYTES).len(),
+            128
+        );
     }
 
     #[test]
@@ -500,7 +496,7 @@ mod tests {
     fn partial_path_appends_suffix() {
         let destination = Path::new("/tmp/gen_2026.dump");
         assert_eq!(
-            partial_path_for(destination),
+            build_partial_path(destination),
             Path::new("/tmp/gen_2026.dump.part")
         );
     }

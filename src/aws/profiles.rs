@@ -1,8 +1,7 @@
+use crate::constants::DEFAULT_AWS_PROFILE;
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 use std::{env, fs, io};
-
-const DEFAULT_PROFILE_NAME: &str = "default";
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AwsFileKind {
@@ -31,14 +30,14 @@ pub fn choose_profile(profile_names: &[String], current_profile: Option<&str>) -
     if let Some(current) = current_profile.filter(|name| has_profile(name)) {
         return Some(current.to_string());
     }
-    if has_profile(DEFAULT_PROFILE_NAME) {
-        return Some(DEFAULT_PROFILE_NAME.to_string());
+    if has_profile(DEFAULT_AWS_PROFILE) {
+        return Some(DEFAULT_AWS_PROFILE.to_string());
     }
     profile_names.first().cloned()
 }
 
 fn read_aws_file(file_kind: AwsFileKind) -> io::Result<Option<String>> {
-    let Some(path) = aws_file_path(file_kind) else {
+    let Some(path) = resolve_aws_file_path(file_kind) else {
         return Ok(None);
     };
 
@@ -50,7 +49,7 @@ fn read_aws_file(file_kind: AwsFileKind) -> io::Result<Option<String>> {
     }
 }
 
-fn aws_file_path(file_kind: AwsFileKind) -> Option<PathBuf> {
+fn resolve_aws_file_path(file_kind: AwsFileKind) -> Option<PathBuf> {
     let (override_env_var, default_file_name) = match file_kind {
         AwsFileKind::Config => ("AWS_CONFIG_FILE", "config"),
         AwsFileKind::Credentials => ("AWS_SHARED_CREDENTIALS_FILE", "credentials"),
@@ -65,20 +64,20 @@ fn aws_file_path(file_kind: AwsFileKind) -> Option<PathBuf> {
 fn parse_profile_names(contents: &str, file_kind: AwsFileKind) -> Vec<String> {
     contents
         .lines()
-        .filter_map(section_header)
-        .filter_map(|section| profile_name_from_section(section, file_kind))
+        .filter_map(parse_section_header)
+        .filter_map(|section| extract_profile_name(section, file_kind))
         .collect()
 }
 
-fn section_header(line: &str) -> Option<&str> {
+fn parse_section_header(line: &str) -> Option<&str> {
     let section = line.trim().strip_prefix('[')?.strip_suffix(']')?.trim();
     Some(section).filter(|name| !name.is_empty())
 }
 
 // In `config`, named profiles are written `[profile name]`; other sections
 // (`[sso-session x]`, `[services x]`) are not profiles. In `credentials`, every section is a profile.
-fn profile_name_from_section(section: &str, file_kind: AwsFileKind) -> Option<String> {
-    if file_kind == AwsFileKind::Credentials || section == DEFAULT_PROFILE_NAME {
+fn extract_profile_name(section: &str, file_kind: AwsFileKind) -> Option<String> {
+    if file_kind == AwsFileKind::Credentials || section == DEFAULT_AWS_PROFILE {
         return Some(section.to_string());
     }
 

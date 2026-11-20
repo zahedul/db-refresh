@@ -1,8 +1,9 @@
 use dioxus::prelude::*;
 
 use crate::format::{format_duration, format_size, format_speed};
-use crate::local_files::{display_local_path, download_dir, reveal_in_finder};
+use crate::local_files::{display_local_path, reveal_in_finder};
 use crate::ui::app_context::use_app_context;
+use crate::ui::download_folder::DownloadFolderControl;
 use crate::ui::downloads::{DownloadJobs, cancel_download, dismiss_download, retry_download};
 use crate::ui::icons::DownloadIcon;
 use crate::ui::panel_header::PanelHeader;
@@ -11,13 +12,11 @@ use crate::ui::state::{DownloadJob, DownloadStatus};
 #[component]
 pub fn JobsPanel(downloads: DownloadJobs) -> Element {
     let jobs = downloads.read().clone();
-    let download_folder = display_local_path(&download_dir());
-
     let running_count = jobs.iter().filter(|job| job.is_running()).count();
     let subtitle = match running_count {
-        0 => format!("Saved to {download_folder}"),
-        1 => format!("1 download running · saved to {download_folder}"),
-        count => format!("{count} downloads running · saved to {download_folder}"),
+        0 => "All downloads finished".to_string(),
+        1 => "1 download running".to_string(),
+        count => format!("{count} downloads running"),
     };
 
     if jobs.is_empty() {
@@ -26,8 +25,9 @@ pub fn JobsPanel(downloads: DownloadJobs) -> Element {
                 PanelHeader {
                     icon: rsx! { DownloadIcon {} },
                     title: "Downloads",
-                    subtitle: format!("Nothing downloading · files are saved to {download_folder}"),
+                    subtitle: "Nothing downloading",
                     is_compact: true,
+                    DownloadFolderControl {}
                 }
             }
         };
@@ -39,6 +39,7 @@ pub fn JobsPanel(downloads: DownloadJobs) -> Element {
                 icon: rsx! { DownloadIcon {} },
                 title: "Downloads",
                 subtitle,
+                DownloadFolderControl {}
             }
             for job in jobs {
                 DownloadRow { key: "{job.request.key}", job, downloads }

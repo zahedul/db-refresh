@@ -1,5 +1,4 @@
-const TOOL_PREFIXES: [&str; 2] = ["pg_restore: ", "psql: "];
-
+use crate::constants::LOG_TOOL_PREFIXES;
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum LogLevel {
     Error,
@@ -84,7 +83,7 @@ impl RestoreLog {
 /// "pg_restore: warning: errors ignored on restore: 8" is a warning, not an error.
 fn classify_log_line(line: &str) -> LogLevel {
     let lowercase_line = line.trim().to_lowercase();
-    let message = TOOL_PREFIXES
+    let message = LOG_TOOL_PREFIXES
         .iter()
         .find_map(|prefix| lowercase_line.strip_prefix(prefix))
         .unwrap_or(&lowercase_line);
