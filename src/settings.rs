@@ -24,6 +24,38 @@ pub struct Settings {
     pub downloaded_files: BTreeMap<String, String>,
     /// Where dumps are saved; `None` means the default, `~/Downloads`.
     pub custom_download_folder: Option<PathBuf>,
+    /// How the Backups list is laid out.
+    pub dump_list_view: DumpListView,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum DumpListView {
+    #[default]
+    List,
+    Grid,
+    Compact,
+}
+
+impl DumpListView {
+    pub const ALL: [Self; 3] = [Self::List, Self::Grid, Self::Compact];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::List => "☰ List",
+            Self::Grid => "▦ Grid",
+            Self::Compact => "≡ Compact",
+        }
+    }
+
+    /// CSS class on the list, which switches the layout.
+    pub fn css_class(self) -> &'static str {
+        match self {
+            Self::List => "list-view",
+            Self::Grid => "grid-view",
+            Self::Compact => "compact-view",
+        }
+    }
 }
 
 impl Settings {
@@ -133,6 +165,7 @@ mod tests {
                 "prod_2026-11-20.dump".to_string(),
             )]),
             custom_download_folder: Some(PathBuf::from("/Volumes/Backups/dumps")),
+            dump_list_view: DumpListView::Grid,
         };
 
         write_settings(&path, &settings).unwrap();

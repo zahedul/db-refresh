@@ -4,15 +4,16 @@ use std::path::PathBuf;
 use dioxus::prelude::*;
 
 use crate::aws::s3::{DumpFile, SearchResult, find_latest_file_per_group};
-use crate::constants::DUMP_FILES_PER_PAGE;
+use crate::constants::{DUMP_FILES_PER_PAGE, S3_FOLDER_SEPARATOR};
 use crate::format::{
     format_count, format_relative_age, format_size, format_utc_timestamp, read_current_epoch_secs,
 };
 use crate::local_files::{has_complete_local_copy, reveal_in_finder};
+use crate::settings::DumpListView;
 use crate::ui::app_context::use_app_context;
 use crate::ui::download_dialog::DownloadDialog;
 use crate::ui::downloads::DownloadJobs;
-use crate::ui::icons::DatabaseIcon;
+use crate::ui::icons::{DatabaseIcon, FolderIcon};
 use crate::ui::panel_header::PanelHeader;
 use crate::ui::s3_location::S3LocationTrail;
 use crate::ui::state::SearchState;
@@ -113,6 +114,7 @@ fn BackupsSummary(dump_count: usize, bucket: String, prefix: String) -> Element 
 
 #[component]
 fn DumpFileList(result: SearchResult, downloads: DownloadJobs) -> Element {
+    let list_view = use_app_context().settings.read().dump_list_view;
     let mut group_filter = use_signal(|| None::<String>);
     let mut shown_limit = use_signal(|| DUMP_FILES_PER_PAGE);
 
@@ -128,6 +130,7 @@ fn DumpFileList(result: SearchResult, downloads: DownloadJobs) -> Element {
         .iter()
         .filter_map(DumpFile::group)
         .collect();
+    let search_prefix = result.request.prefix.as_str();
     let active_group = group_filter();
     let matching_files: Vec<&DumpFile> = result
         .dump_files
@@ -150,6 +153,7 @@ fn DumpFileList(result: SearchResult, downloads: DownloadJobs) -> Element {
     rsx! {
         div { class: "results-toolbar",
             p { class: "muted results-summary", "{summary}" }
+            ViewSwitcher { current: list_view }
             if groups.len() > 1 {
                 div { class: "chips",
                     FilterChip {
@@ -174,12 +178,13 @@ fn DumpFileList(result: SearchResult, downloads: DownloadJobs) -> Element {
         if result.is_truncated {
             p { class: "warning", "Stopped after scanning 50,000 objects. Pick a narrower folder." }
         }
-        div { class: "dump-list",
+        div { class: "dump-list {list_view.css_class()}",
             for file in matching_files.into_iter().take(shown_count) {
                 DumpCard {
                     key: "{file.key}",
                     file: file.clone(),
                     is_latest: latest_keys.contains(file.key.as_str()),
+                    folder: file.extract_relative_folder(search_prefix).map(str::to_string),
                     now_epoch_secs: now,
                     profile: result.request.profile.clone(),
                     bucket: result.request.bucket.clone(),
@@ -222,6 +227,26 @@ fn summarize_list(shown_count: usize, matching_count: usize, total_count: usize)
     format!("{shown_part}{filtered_part} · newest first")
 }
 
+/// List / Grid / Compact; the choice is saved in settings.
+#[component]
+fn ViewSwitcher(current: DumpListView) -> Element {
+    let mut settings = use_app_context().settings;
+
+    rsx! {
+        div { class: "segmented", role: "group",
+            for view in DumpListView::ALL {
+                button {
+                    key: "{view.css_class()}",
+                    class: "segment",
+                    class: if view == current { "active" },
+                    onclick: move |_| settings.with_mut(|settings| settings.dump_list_view = view),
+                    "{view.label()}"
+                }
+            }
+        }
+    }
+}
+
 #[component]
 fn FilterChip(label: String, is_active: bool, on_pick: EventHandler<()>) -> Element {
     rsx! {
@@ -238,6 +263,8 @@ fn FilterChip(label: String, is_active: bool, on_pick: EventHandler<()>) -> Elem
 fn DumpCard(
     file: DumpFile,
     is_latest: bool,
+    /// Folder relative to the search, shown as a tag; `None` for top-level files.
+    folder: Option<String>,
     now_epoch_secs: i64,
     profile: String,
     bucket: String,
@@ -278,6 +305,13 @@ fn DumpCard(
                     }
                 }
                 div { class: "dump-meta",
+                    if let Some(folder) = &folder {
+                        span { class: "s3-segment folder compact", title: "{folder}",
+                            FolderIcon {}
+                            "{label_folder(folder)}"
+                        }
+                        span { class: "meta-dot", "·" }
+                    }
                     span { "{format_size(file.size_bytes)}" }
                     if let Some(age) = age {
                         span { class: "meta-dot", "·" }
@@ -366,9 +400,19 @@ fn DumpCardAction(
     }
 }
 
+/// `prod/daily` -> `prod / daily`
+fn label_folder(folder: &str) -> String {
+    folder.replace(S3_FOLDER_SEPARATOR, " / ")
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn folders_are_labelled_readably() {
+        assert_eq!(label_folder("prod/daily"), "prod / daily");
+    }
 
     #[test]
     fn list_summary_mentions_paging_and_filtering() {

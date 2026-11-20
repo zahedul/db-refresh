@@ -68,6 +68,20 @@ impl DumpFile {
     pub fn group(&self) -> Option<&str> {
         extract_dump_group(self.file_name())
     }
+
+    /// The full folder of the key: `backups/prod/x.dump` -> `backups/prod`.
+    pub fn folder(&self) -> Option<&str> {
+        let (folder, _) = self.key.rsplit_once(S3_FOLDER_SEPARATOR)?;
+        Some(folder)
+    }
+
+    /// The folder relative to where the search started: (`backups/prod/x.dump`, `backups/`)
+    /// -> `prod`. `None` for files directly in the searched folder.
+    pub fn extract_relative_folder(&self, search_prefix: &str) -> Option<&str> {
+        let relative_key = self.key.strip_prefix(search_prefix).unwrap_or(&self.key);
+        let (folder, _) = relative_key.rsplit_once(S3_FOLDER_SEPARATOR)?;
+        Some(folder).filter(|folder| !folder.is_empty())
+    }
 }
 
 /// Keys of the newest file in each group. Expects files sorted newest first.
@@ -75,7 +89,8 @@ pub fn find_latest_file_per_group(dump_files: &[DumpFile]) -> HashSet<&str> {
     let mut seen_groups = HashSet::new();
     dump_files
         .iter()
-        .filter(|file| seen_groups.insert(file.group()))
+        // Per folder too: when the whole bucket is searched, each folder has its own latest.
+        .filter(|file| seen_groups.insert((file.folder(), file.group())))
         .map(|file| file.key.as_str())
         .collect()
 }
@@ -308,6 +323,38 @@ mod tests {
         assert_eq!(
             latest,
             HashSet::from(["prod_3.dump", "stg_3.dump", "plain.dump"])
+        );
+    }
+
+    #[test]
+    fn relative_folder_is_measured_from_the_search_prefix() {
+        let nested = dump_file("backups/prod/daily/x.dump", None);
+        assert_eq!(
+            nested.extract_relative_folder("backups/"),
+            Some("prod/daily")
+        );
+        assert_eq!(
+            nested.extract_relative_folder(""),
+            Some("backups/prod/daily")
+        );
+        assert_eq!(nested.folder(), Some("backups/prod/daily"));
+
+        let top_level = dump_file("backups/x.dump", None);
+        assert_eq!(top_level.extract_relative_folder("backups/"), None);
+        assert_eq!(dump_file("x.dump", None).folder(), None);
+    }
+
+    #[test]
+    fn latest_is_picked_per_folder_and_group() {
+        let files = vec![
+            dump_file("prod/2026-11-20.dump", Some(2)),
+            dump_file("stg/2026-11-20.dump", Some(2)),
+            dump_file("prod/2026-11-19.dump", Some(1)),
+        ];
+        let latest = find_latest_file_per_group(&files);
+        assert_eq!(
+            latest,
+            HashSet::from(["prod/2026-11-20.dump", "stg/2026-11-20.dump"])
         );
     }
 

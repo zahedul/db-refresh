@@ -2152,3 +2152,158 @@ button.with-icon {
 .jobs-panel .panel-header-actions {
   margin-left: auto;
 }
+
+/* ---------- Folder tags and folder filter ---------- */
+
+.chips-label {
+  margin-right: 2px;
+  color: var(--muted);
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.s3-segment.compact {
+  max-width: 260px;
+  padding: 1px 8px 1px 6px;
+  overflow: hidden;
+  font-size: 11px;
+  text-overflow: ellipsis;
+}
+
+.s3-segment.compact svg {
+  width: 11px;
+  height: 11px;
+}
+
+/* ---------- Backups list views: List / Grid / Compact ---------- */
+
+.segmented {
+  display: inline-flex;
+  margin-left: auto;
+  padding: 2px;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+}
+
+.segment {
+  padding: 4px 10px;
+  color: var(--muted);
+  background: transparent;
+  border-radius: 6px;
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.segment:hover {
+  color: var(--text);
+}
+
+.segment.active {
+  color: var(--accent);
+  background: var(--panel);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1);
+}
+
+/* Name-prefix chips go on their own line under the summary and view switcher. */
+.results-toolbar .chips {
+  flex-basis: 100%;
+}
+
+/* Grid: cards in columns, action at the bottom. */
+.dump-list.grid-view {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(250px, 1fr));
+  gap: 10px;
+}
+
+.dump-list.grid-view .dump-card {
+  flex-direction: column;
+  align-items: stretch;
+  gap: 10px;
+  padding: 14px;
+}
+
+.dump-list.grid-view .dump-icon {
+  width: 32px;
+  height: 32px;
+}
+
+.dump-list.grid-view .dump-title-row,
+.dump-list.grid-view .dump-meta {
+  flex-wrap: wrap;
+}
+
+.dump-list.grid-view .dump-name {
+  white-space: normal;
+  word-break: break-all;
+}
+
+.dump-list.grid-view .dump-action,
+.dump-list.grid-view .dump-action-buttons {
+  display: flex;
+  gap: 6px;
+  width: 100%;
+}
+
+.dump-list.grid-view .dump-action button {
+  flex: 1;
+  justify-content: center;
+}
+
+.dump-list.grid-view .dump-progress-label {
+  width: 100%;
+  text-align: left;
+}
+
+/* Compact: one dense line per dump, like a table. */
+.dump-list.compact-view {
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+}
+
+.dump-list.compact-view .dump-card {
+  padding: 6px 12px;
+  border: none;
+  border-bottom: 1px solid var(--border);
+  border-radius: 0;
+}
+
+.dump-list.compact-view .dump-card:last-child {
+  border-bottom: none;
+}
+
+.dump-list.compact-view .dump-card:hover {
+  background: var(--bg);
+  box-shadow: none;
+}
+
+.dump-list.compact-view .dump-icon,
+.dump-list.compact-view .dump-card .progress-track {
+  display: none;
+}
+
+.dump-list.compact-view .dump-main {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.dump-list.compact-view .dump-title-row {
+  flex: 1;
+  min-width: 0;
+}
+
+.dump-list.compact-view .dump-name {
+  font-size: 12.5px;
+}
+
+.dump-list.compact-view .dump-meta {
+  flex-shrink: 0;
+  margin-top: 0;
+}

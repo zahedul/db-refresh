@@ -91,7 +91,9 @@ Your bucket, folder and profile are remembered for next time.
 ### The Backups list
 
 - The newest **10 dumps** are shown first; use **Show 10 more** or **Show all** for older ones.
-- **Latest** marks the newest dump of each kind. Coloured tags (e.g. **PROD**, **STG**) show the dump prefix.
+- **Latest** marks the newest dump of each kind in each folder. Coloured tags (e.g. **PROD**, **STG**) show the dump prefix.
+- When you search a bucket or a parent folder, each dump shows its **folder** (📁 tag), so you can tell where it comes from.
+- Switch the layout with **☰ List**, **▦ Grid** (cards side by side) or **≡ Compact** (one line per dump, good for long lists). Your choice is remembered.
 - Hover the age (e.g. *6h ago*) to see the exact time.
 - **✓ On disk** means the file is already downloaded.
 
