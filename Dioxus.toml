@@ -1,0 +1,15 @@
+[application]
+name = "DB Refresh"
+default_platform = "desktop"
+
+[bundle]
+identifier = "dev.dbrefresh.app"
+publisher = "DB Refresh"
+icon = ["icons/AppIcon.icns"]
+category = "DeveloperTool"
+short_description = "Download PostgreSQL dumps from S3 and restore them into local databases."
+copyright = "© 2026"
+
+[bundle.macos]
+minimum_system_version = "13.0"
+bundle_name = "DB Refresh"
